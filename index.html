@@ -9,666 +9,724 @@
     body { overflow: hidden; background: #000; }
     canvas { display: block; }
     #hint {
-      position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
-      color: rgba(255,255,255,0.3); font-family: 'Georgia', serif;
-      font-size: 11px; letter-spacing: .12em; pointer-events: none;
-      text-shadow: 0 1px 6px #000;
+      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+      color: rgba(255,255,255,0.28); font-family: 'Georgia', serif;
+      font-size: 11px; letter-spacing: .14em; pointer-events: none;
     }
   </style>
 </head>
 <body>
   <div id="hint">DRAG TO LOOK &nbsp;·&nbsp; SCROLL TO ZOOM</div>
 
+  <!-- Three.js core -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+  <!-- Post-processing stack -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
 
   <script>
   (function() {
 
     // ── Renderer ──────────────────────────────────────────────────────────
-    var renderer = new THREE.WebGLRenderer({ antialias: true });
+    var renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     renderer.setSize(innerWidth, innerHeight);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.physicallyCorrectLights = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.05;
+    renderer.toneMappingExposure = 0.85;
     renderer.outputEncoding = THREE.sRGBEncoding;
     document.body.appendChild(renderer.domElement);
 
     var scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0d1a2a);
-    scene.fog = new THREE.Fog(0x0d1a2a, 10, 20);
+    scene.background = new THREE.Color(0x060c14);
 
-    var camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.05, 30);
-    camera.position.set(0, 0.4, 2.8);
+    var camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.04, 25);
+    camera.position.set(0, 0.45, 3.0);
 
     var controls = new THREE.OrbitControls(camera, renderer.domElement);
     controls.enablePan     = false;
     controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
-    controls.rotateSpeed   = 0.10;   // very slow
-    controls.zoomSpeed     = 0.25;   // very slow zoom
-    controls.minDistance   = 0.6;
-    controls.maxDistance   = 4.5;
-    controls.maxPolarAngle = Math.PI * 0.55;
-    controls.minPolarAngle = Math.PI * 0.28;
-    controls.target.set(0, 0.1, -0.3);
+    controls.dampingFactor = 0.04;
+    controls.rotateSpeed   = 0.09;
+    controls.zoomSpeed     = 0.22;
+    controls.minDistance   = 0.7;
+    controls.maxDistance   = 4.2;
+    controls.maxPolarAngle = Math.PI * 0.53;
+    controls.minPolarAngle = Math.PI * 0.30;
+    controls.target.set(0, 0.1, -0.2);
     controls.update();
 
-    // ── Yacht dimensions (saloon) ─────────────────────────────────────────
-    var W = 5.8, H = 2.5, D = 8.5;
+    // ── Post-processing ───────────────────────────────────────────────────
+    var composer = new THREE.EffectComposer(renderer);
+    composer.addPass(new THREE.RenderPass(scene, camera));
+
+    // Bloom — makes lights glow like real bulbs
+    var bloom = new THREE.UnrealBloomPass(
+      new THREE.Vector2(innerWidth, innerHeight),
+      0.65,   // strength
+      0.45,   // radius
+      0.72    // threshold
+    );
+    composer.addPass(bloom);
+
+    // Custom: vignette + film grain + warm color grade
+    var FXShader = {
+      uniforms: {
+        tDiffuse:    { value: null },
+        uTime:       { value: 0 },
+        uVigOff:     { value: 0.38 },
+        uVigDark:    { value: 1.55 },
+        uGrain:      { value: 0.038 },
+        uContrast:   { value: 1.06 }
+      },
+      vertexShader: [
+        'varying vec2 vUv;',
+        'void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }'
+      ].join('\n'),
+      fragmentShader: [
+        'uniform sampler2D tDiffuse;',
+        'uniform float uTime, uVigOff, uVigDark, uGrain, uContrast;',
+        'varying vec2 vUv;',
+        'float rand(vec2 co){ return fract(sin(dot(co,vec2(12.9898,78.233)))*43758.5453); }',
+        'void main(){',
+        '  vec4 c = texture2D(tDiffuse, vUv);',
+        // Vignette
+        '  vec2 uv2 = (vUv - 0.5) * 2.0;',
+        '  float v = 1.0 - smoothstep(uVigOff, uVigOff + 0.7, dot(uv2, uv2));',
+        '  c.rgb *= mix(uVigDark * 0.35, 1.0, v);',
+        // Contrast
+        '  c.rgb = (c.rgb - 0.5) * uContrast + 0.5;',
+        // Warm color grade (amber/gold)
+        '  c.r = c.r * 1.06;',
+        '  c.g = c.g * 0.97;',
+        '  c.b = c.b * 0.88;',
+        // Subtle chromatic aberration
+        '  float ca = 0.0008;',
+        '  c.r = mix(c.r, texture2D(tDiffuse, vUv + vec2(ca,0.0)).r, 0.5);',
+        '  c.b = mix(c.b, texture2D(tDiffuse, vUv - vec2(ca,0.0)).b, 0.5);',
+        // Film grain
+        '  float g = rand(vUv + fract(uTime * 0.037)) * uGrain;',
+        '  c.rgb += g - uGrain * 0.5;',
+        '  c.rgb = clamp(c.rgb, 0.0, 1.0);',
+        '  gl_FragColor = c;',
+        '}'
+      ].join('\n')
+    };
+    var fxPass = new THREE.ShaderPass(FXShader);
+    fxPass.renderToScreen = true;
+    composer.addPass(fxPass);
+
+    // ── Room ──────────────────────────────────────────────────────────────
+    var W = 5.8, H = 2.5, D = 9.0;
     var hw = W/2, hh = H/2, hd = D/2;
 
-    // ── Lighting ──────────────────────────────────────────────────────────
-    scene.add(new THREE.AmbientLight(0xfff8e8, 0.4));
+    // ── Lighting — dramatic & layered ─────────────────────────────────────
 
-    // Overhead recessed lights (3 along ceiling)
-    [-2, 0, 2].forEach(function(lz) {
-      var l = new THREE.PointLight(0xfff5e0, 60, 4, 2);
-      l.position.set(0, hh - 0.08, lz);
+    // Very dim ambient — forces lights to do the work
+    scene.add(new THREE.AmbientLight(0xfff0d8, 0.18));
+
+    // Hemisphere sky/ground for subtle fill
+    scene.add(new THREE.HemisphereLight(0xffeedd, 0x3a2808, 0.3));
+
+    // Recessed ceiling downlights
+    var ceilLights = [];
+    [-2.2, 0, 2.2].forEach(function(lz, li) {
+      var l = new THREE.PointLight(0xfff5e0, 90, 4.5, 2);
+      l.position.set(0, hh - 0.06, lz);
       l.castShadow = true;
-      l.shadow.mapSize.set(512, 512);
+      l.shadow.mapSize.set(1024, 1024);
+      l.shadow.radius = 4;
+      l.shadow.bias = -0.002;
       scene.add(l);
-      // Recessed light housing
-      var recMesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.06, 0.06, 0.04, 12),
-        new THREE.MeshBasicMaterial({ color: 0xfffee8 })
+      ceilLights.push(l);
+
+      // Emissive disc for visible bulb
+      var disc = new THREE.Mesh(
+        new THREE.CircleGeometry(0.055, 20),
+        new THREE.MeshBasicMaterial({ color: 0xfffce8 })
       );
-      recMesh.position.set(0, hh - 0.01, lz);
-      scene.add(recMesh);
+      disc.rotation.x = Math.PI/2;
+      disc.position.set(0, hh - 0.001, lz);
+      scene.add(disc);
     });
 
-    // Porthole daylight — warm ocean sunlight from both sides
-    var sun1 = new THREE.SpotLight(0xfff0d0, 3.0, 8, Math.PI / 8, 0.5);
-    sun1.position.set(-hw - 0.5, 0.3, -1.5);
-    sun1.target.position.set(0.5, -0.2, -1.5);
-    sun1.castShadow = true;
-    sun1.shadow.mapSize.set(1024, 1024);
-    scene.add(sun1); scene.add(sun1.target);
+    // Porthole sunlight shafts (port side, 2 sources)
+    var portLights = [];
+    [-1.6, 0.9].forEach(function(pz) {
+      var pl = new THREE.SpotLight(0xfff8e0, 4.5, 9, Math.PI/9, 0.4, 1.5);
+      pl.position.set(-hw - 0.4, 0.3, pz);
+      pl.target.position.set(1.5, -0.5, pz + 0.3);
+      pl.castShadow = true;
+      pl.shadow.mapSize.set(1024, 1024);
+      pl.shadow.radius = 3;
+      scene.add(pl); scene.add(pl.target);
+      portLights.push(pl);
+    });
 
-    var sun2 = new THREE.SpotLight(0xfff0d0, 1.5, 7, Math.PI / 9, 0.6);
-    sun2.position.set(-hw - 0.5, 0.3, 1.0);
-    sun2.target.position.set(0.5, -0.2, 1.0);
-    sun2.castShadow = true;
-    scene.add(sun2); scene.add(sun2.target);
+    // Starboard porthole fill
+    var starPL = new THREE.SpotLight(0xffe8c0, 2.5, 7, Math.PI/10, 0.5, 2);
+    starPL.position.set(hw + 0.4, 0.3, -0.5);
+    starPL.target.position.set(-1.0, -0.5, -0.5);
+    starPL.castShadow = true; scene.add(starPL); scene.add(starPL.target);
+    portLights.push(starPL);
 
-    // Warm bounce from teak floor
-    var bounce = new THREE.PointLight(0xffcc80, 10, 4, 2);
-    bounce.position.set(0, -hh + 0.1, 0);
+    // Warm bounce off teak floor
+    var bounce = new THREE.PointLight(0xffaa40, 12, 3.5, 2);
+    bounce.position.set(0, -hh + 0.08, 0);
     scene.add(bounce);
 
-    // ── Texture makers ────────────────────────────────────────────────────
+    // ── Texture utilities ─────────────────────────────────────────────────
 
-    function noise(ctx, w, h, a) {
-      for (var i = 0; i < 6000; i++) {
+    function noise(ctx, w, h, a, count) {
+      count = count || 5000;
+      for (var i = 0; i < count; i++) {
         var al = Math.random() * a;
         ctx.fillStyle = Math.random() > 0.5
-          ? 'rgba(255,255,255,' + al + ')' : 'rgba(0,0,0,' + al + ')';
-        ctx.fillRect(Math.random()*w, Math.random()*h, 1+Math.random(), 1+Math.random());
+          ? 'rgba(255,255,255,'+al+')' : 'rgba(0,0,0,'+al+')';
+        ctx.fillRect(Math.random()*w, Math.random()*h, 1+Math.random()*1.5, 1);
       }
     }
 
-    // Teak & holly sole — alternating dark/light planks with caulk lines
     function makeTeakFloor() {
-      var c = document.createElement('canvas'); c.width = 1024; c.height = 1024;
+      var c = document.createElement('canvas'); c.width=2048; c.height=1024;
       var x = c.getContext('2d');
-      x.fillStyle = '#5c3810'; x.fillRect(0,0,1024,1024);
-      var plankH = 36;
-      for (var row = 0; row < Math.ceil(1024/plankH); row++) {
-        var py = row * plankH;
-        var isHolly = (row % 7 === 3); // every 7th strip is white holly
-        var base = isHolly ? '#e8e2d0' : 'hsl(' + (22+Math.random()*10) + ',55%,' + (24+Math.random()*12) + '%)';
-        x.fillStyle = base; x.fillRect(0, py+1, 1024, plankH-2);
-        if (!isHolly) {
-          // Grain
-          x.strokeStyle = 'rgba(0,0,0,0.07)'; x.lineWidth = 1;
-          for (var gi = 0; gi < 12; gi++) {
-            var gx2 = Math.random() * 1024;
-            x.beginPath(); x.moveTo(gx2, py); x.lineTo(gx2+(Math.random()-.5)*18, py+plankH); x.stroke();
-          }
-          // Plank end joints at random intervals
-          if (Math.random() > 0.65) {
-            var jx = 80 + Math.random() * 864;
-            x.strokeStyle = 'rgba(0,0,0,0.2)'; x.lineWidth = 1.5;
-            x.beginPath(); x.moveTo(jx, py); x.lineTo(jx, py+plankH); x.stroke();
+      x.fillStyle='#2a1406'; x.fillRect(0,0,2048,1024);
+      var ph = 32;
+      for (var row=0; row < Math.ceil(1024/ph); row++) {
+        var py = row * ph;
+        var isHolly = ((row % 8) === 4);
+        for (var col=0; col<2048; col+=420) {
+          if (isHolly) {
+            x.fillStyle='hsl(40,'+(15+Math.random()*8)+'%,'+(82+Math.random()*8)+'%)';
+            x.fillRect(col, py+1, 418, ph-2);
+          } else {
+            var hue=22+Math.random()*12, lit=22+Math.random()*14;
+            var g=x.createLinearGradient(col,py,col+420,py);
+            g.addColorStop(0,'hsl('+hue+',52%,'+lit+'%)');
+            g.addColorStop(0.25,'hsl('+(hue+5)+',48%,'+(lit+9)+'%)');
+            g.addColorStop(0.6,'hsl('+hue+',50%,'+(lit+3)+'%)');
+            g.addColorStop(1,'hsl('+(hue+3)+',49%,'+(lit+1)+'%)');
+            x.fillStyle=g; x.fillRect(col, py+1, 420, ph-2);
+            // grain lines
+            x.strokeStyle='rgba(0,0,0,0.055)'; x.lineWidth=0.8;
+            for (var gi=0;gi<14;gi++){
+              var gx2=col+Math.random()*420;
+              x.beginPath(); x.moveTo(gx2,py); x.lineTo(gx2+(Math.random()-.5)*22,py+ph); x.stroke();
+            }
+            // pore shadows
+            for (var pi2=0;pi2<6;pi2++){
+              x.fillStyle='rgba(0,0,0,'+(0.04+Math.random()*0.06)+')';
+              x.fillRect(col+Math.random()*418, py+2+Math.random()*(ph-4), 2+Math.random()*4, 1);
+            }
           }
         }
-        // Caulk lines (black between planks)
-        x.fillStyle = '#1a0e06'; x.fillRect(0, py, 1024, 1);
+        x.fillStyle='#100802'; x.fillRect(0,py,2048,1);
       }
-      noise(x, 1024, 1024, 0.02);
-      var t = new THREE.CanvasTexture(c);
-      t.wrapS = t.wrapT = THREE.RepeatWrapping;
-      t.repeat.set(2.5, 4);
-      t.encoding = THREE.sRGBEncoding;
+      noise(x,2048,1024,0.018,8000);
+      var t=new THREE.CanvasTexture(c);
+      t.wrapS=t.wrapT=THREE.RepeatWrapping;
+      t.repeat.set(2,3.5);
+      t.encoding=THREE.sRGBEncoding;
       return t;
     }
 
-    // White lacquer hull sides with teak strip inlay
     function makeHullWall() {
-      var c = document.createElement('canvas'); c.width = 1024; c.height = 512;
+      var c = document.createElement('canvas'); c.width=2048; c.height=512;
       var x = c.getContext('2d');
-      x.fillStyle = '#f4f0ea'; x.fillRect(0,0,1024,512);
-      // Teak trim strips
-      [80, 110, 140, 340, 365, 390].forEach(function(ty) {
-        var base = (ty < 200) ? '#7a4e20' : '#8a5c28';
-        x.fillStyle = base; x.fillRect(0, ty, 1024, 20);
-        // Grain
-        x.strokeStyle='rgba(0,0,0,0.06)'; x.lineWidth=1;
-        for (var gi=0; gi<16; gi++) {
-          var gx2 = Math.random()*1024;
-          x.beginPath(); x.moveTo(gx2,ty); x.lineTo(gx2+(Math.random()-.5)*12,ty+20); x.stroke();
+      // White gelcoat base with very subtle curvature gradient
+      var bg=x.createLinearGradient(0,0,0,512);
+      bg.addColorStop(0,'#f6f2ec'); bg.addColorStop(0.5,'#f0ece4'); bg.addColorStop(1,'#e8e2d8');
+      x.fillStyle=bg; x.fillRect(0,0,2048,512);
+      // Panel lines (moulded fiberglass panels)
+      x.strokeStyle='rgba(160,148,132,0.3)'; x.lineWidth=1.5;
+      [340,680,1020,1360,1700].forEach(function(lx){
+        x.beginPath(); x.moveTo(lx,0); x.lineTo(lx,512); x.stroke();
+      });
+      // Teak inlay strips
+      [75,100,125, 310,335,360].forEach(function(ty){
+        var hue=22+Math.random()*10, lit=26+Math.random()*10;
+        x.fillStyle='hsl('+hue+',54%,'+lit+'%)';
+        x.fillRect(0,ty,2048,22);
+        x.strokeStyle='rgba(0,0,0,0.06)'; x.lineWidth=0.8;
+        for (var gi=0;gi<30;gi++){
+          var gx2=Math.random()*2048;
+          x.beginPath(); x.moveTo(gx2,ty); x.lineTo(gx2+(Math.random()-.5)*15,ty+22); x.stroke();
         }
-        x.fillStyle='rgba(0,0,0,0.08)'; x.fillRect(0,ty,1024,1);
-        x.fillStyle='rgba(255,255,255,0.12)'; x.fillRect(0,ty+19,1024,1);
+        x.fillStyle='rgba(0,0,0,0.12)'; x.fillRect(0,ty,2048,1.5);
+        x.fillStyle='rgba(255,255,255,0.14)'; x.fillRect(0,ty+20.5,2048,1.5);
       });
-      // Panel lines
-      x.strokeStyle='rgba(180,170,155,0.4)'; x.lineWidth=1;
-      for (var lx2=0; lx2<1024; lx2+=220) { x.beginPath(); x.moveTo(lx2,0); x.lineTo(lx2,512); x.stroke(); }
-      noise(x, 1024, 512, 0.015);
-      var t = new THREE.CanvasTexture(c);
-      t.wrapS = t.wrapT = THREE.RepeatWrapping;
-      t.repeat.set(3, 1);
-      t.encoding = THREE.sRGBEncoding;
+      // Lacquer reflection streak
+      var ref=x.createLinearGradient(0,0,2048,0);
+      ref.addColorStop(0,'rgba(255,255,255,0)');
+      ref.addColorStop(0.3,'rgba(255,255,255,0.06)');
+      ref.addColorStop(0.7,'rgba(255,255,255,0.03)');
+      ref.addColorStop(1,'rgba(255,255,255,0)');
+      x.fillStyle=ref; x.fillRect(0,150,2048,60);
+      noise(x,2048,512,0.012,4000);
+      var t=new THREE.CanvasTexture(c);
+      t.wrapS=t.wrapT=THREE.RepeatWrapping;
+      t.repeat.set(3,1);
+      t.encoding=THREE.sRGBEncoding;
       return t;
     }
 
-    // Cream overhead liner (smooth)
-    function makeCeilingMap() {
-      var c = document.createElement('canvas'); c.width = 512; c.height = 512;
-      var x = c.getContext('2d');
-      x.fillStyle = '#f8f5ee'; x.fillRect(0,0,512,512);
-      // Subtle panel lines
-      x.strokeStyle = 'rgba(160,150,135,0.25)'; x.lineWidth = 1;
-      [128, 256, 384].forEach(function(l) {
-        x.beginPath(); x.moveTo(l,0); x.lineTo(l,512); x.stroke();
-        x.beginPath(); x.moveTo(0,l); x.lineTo(512,l); x.stroke();
+    function makeCeilingTex() {
+      var c=document.createElement('canvas'); c.width=1024; c.height=1024;
+      var x=c.getContext('2d');
+      x.fillStyle='#f5f2ec'; x.fillRect(0,0,1024,1024);
+      x.strokeStyle='rgba(180,170,155,0.2)'; x.lineWidth=1;
+      [256,512,768].forEach(function(l){
+        x.beginPath(); x.moveTo(l,0); x.lineTo(l,1024); x.stroke();
+        x.beginPath(); x.moveTo(0,l); x.lineTo(1024,l); x.stroke();
       });
-      noise(x, 512, 512, 0.012);
-      var t = new THREE.CanvasTexture(c);
-      t.wrapS = t.wrapT = THREE.RepeatWrapping;
-      t.repeat.set(3, 2);
-      t.encoding = THREE.sRGBEncoding;
+      noise(x,1024,1024,0.01,3000);
+      var t=new THREE.CanvasTexture(c);
+      t.wrapS=t.wrapT=THREE.RepeatWrapping;
+      t.repeat.set(2,2);
+      t.encoding=THREE.sRGBEncoding;
       return t;
     }
 
-    // Ocean porthole view
-    function makeOceanView() {
-      var c = document.createElement('canvas'); c.width = 256; c.height = 256;
-      var x = c.getContext('2d');
-      // Sky
-      var sky = x.createLinearGradient(0,0,0,130);
-      sky.addColorStop(0,'#1a4a88'); sky.addColorStop(0.6,'#3a80cc'); sky.addColorStop(1,'#6ab0e8');
-      x.fillStyle=sky; x.fillRect(0,0,256,130);
+    function makeOceanTex() {
+      var c=document.createElement('canvas'); c.width=512; c.height=512;
+      var x=c.getContext('2d');
+      var sky=x.createLinearGradient(0,0,0,260);
+      sky.addColorStop(0,'#0d2a5a'); sky.addColorStop(0.5,'#1a5098'); sky.addColorStop(0.85,'#4890c8'); sky.addColorStop(1,'#70b8e8');
+      x.fillStyle=sky; x.fillRect(0,0,512,260);
       // Clouds
-      x.fillStyle='rgba(255,255,255,0.6)';
-      [[40,30,55,18],[140,22,70,16],[200,40,45,14],[80,50,40,12]].forEach(function(cl){
+      x.fillStyle='rgba(220,235,255,0.65)';
+      [[70,55,80,22],[200,38,110,20],[380,50,90,18],[140,75,60,14],[450,72,70,16]].forEach(function(cl){
         x.beginPath(); x.ellipse(cl[0],cl[1],cl[2],cl[3],0,0,Math.PI*2); x.fill();
       });
       // Horizon glow
-      x.fillStyle='rgba(255,240,200,0.3)'; x.fillRect(0,120,256,20);
-      // Ocean
-      var sea = x.createLinearGradient(0,130,0,256);
-      sea.addColorStop(0,'#2a6aaa'); sea.addColorStop(0.5,'#1a4880'); sea.addColorStop(1,'#0e2850');
-      x.fillStyle=sea; x.fillRect(0,130,256,126);
-      // Wave highlights
-      x.strokeStyle='rgba(180,220,255,0.45)'; x.lineWidth=1.5;
-      for (var wy=140; wy<250; wy+=14) {
+      x.fillStyle='rgba(255,240,180,0.2)'; x.fillRect(0,240,512,30);
+      var sea=x.createLinearGradient(0,260,0,512);
+      sea.addColorStop(0,'#1848a0'); sea.addColorStop(0.4,'#103080'); sea.addColorStop(1,'#081840');
+      x.fillStyle=sea; x.fillRect(0,260,512,252);
+      // Sun glint
+      x.fillStyle='rgba(255,240,140,0.3)'; x.fillRect(215,265,80,70);
+      x.fillStyle='rgba(255,240,140,0.12)'; x.fillRect(180,335,150,60);
+      // Wave caps
+      x.strokeStyle='rgba(160,210,255,0.4)'; x.lineWidth=1.5;
+      for (var wy=278;wy<505;wy+=16){
         x.beginPath();
-        for (var wx=0; wx<256; wx+=30) {
-          x.moveTo(wx,wy); x.quadraticCurveTo(wx+7,wy-3,wx+15,wy); x.quadraticCurveTo(wx+23,wy+3,wx+30,wy);
+        for (var wx=0;wx<512;wx+=36){
+          x.moveTo(wx,wy); x.quadraticCurveTo(wx+9,wy-3.5,wx+18,wy); x.quadraticCurveTo(wx+27,wy+3.5,wx+36,wy);
         }
         x.stroke();
       }
-      // Sun glint
-      x.fillStyle='rgba(255,240,150,0.25)'; x.fillRect(100,130,56,50);
-      return new THREE.CanvasTexture(c);
-    }
-
-    // Maritime paintings
-    function makeArt(style) {
-      var c = document.createElement('canvas'); c.width=600; c.height=400;
-      var x = c.getContext('2d');
-
-      if (style === 0) {
-        // Classic tall ship at sea
-        var sky=x.createLinearGradient(0,0,0,220);
-        sky.addColorStop(0,'#1a2f5a'); sky.addColorStop(0.5,'#2a5080'); sky.addColorStop(1,'#6a9ab8');
-        x.fillStyle=sky; x.fillRect(0,0,600,220);
-        // Clouds
-        x.fillStyle='rgba(220,230,245,0.7)';
-        [[80,60,90,25],[250,40,110,22],[450,55,80,20],[160,80,60,16]].forEach(function(cl){
-          x.beginPath(); x.ellipse(cl[0],cl[1],cl[2],cl[3],0,0,Math.PI*2); x.fill();
-        });
-        // Sea
-        var sea=x.createLinearGradient(0,220,0,400);
-        sea.addColorStop(0,'#2a5880'); sea.addColorStop(1,'#0e2040');
-        x.fillStyle=sea; x.fillRect(0,220,600,180);
-        // Waves
-        x.strokeStyle='rgba(150,200,240,0.4)'; x.lineWidth=2;
-        for (var wy=235; wy<395; wy+=18) {
-          x.beginPath();
-          for (var wx=0; wx<600; wx+=45) {
-            x.moveTo(wx,wy); x.quadraticCurveTo(wx+11,wy-4,wx+22,wy); x.quadraticCurveTo(wx+33,wy+4,wx+45,wy);
-          }
-          x.stroke();
-        }
-        // Hull
-        x.fillStyle='#1a0e06'; x.beginPath();
-        x.moveTo(230,240); x.lineTo(370,240); x.lineTo(385,268); x.lineTo(215,268); x.closePath(); x.fill();
-        x.fillStyle='rgba(180,60,30,0.9)';
-        x.beginPath(); x.moveTo(235,235); x.lineTo(365,235); x.lineTo(370,240); x.lineTo(230,240); x.closePath(); x.fill();
-        // Masts
-        x.strokeStyle='#5a3810'; x.lineWidth=4;
-        x.beginPath(); x.moveTo(270,235); x.lineTo(270,60); x.stroke();
-        x.beginPath(); x.moveTo(330,235); x.lineTo(325,75); x.stroke();
-        x.lineWidth=2;
-        x.beginPath(); x.moveTo(270,60); x.lineTo(325,75); x.stroke();
-        // Sails
-        x.fillStyle='rgba(245,238,220,0.92)';
-        x.beginPath(); x.moveTo(270,65); x.lineTo(320,100); x.lineTo(270,190); x.closePath(); x.fill();
-        x.beginPath(); x.moveTo(270,65); x.lineTo(222,105); x.lineTo(270,195); x.closePath(); x.fill();
-        x.beginPath(); x.moveTo(325,78); x.lineTo(368,108); x.lineTo(325,195); x.closePath(); x.fill();
-        // Rigging
-        x.strokeStyle='rgba(60,35,10,0.6)'; x.lineWidth=1;
-        [[270,65,215,235],[270,65,385,268],[325,78,215,235],[325,78,385,268]].forEach(function(l){
-          x.beginPath(); x.moveTo(l[0],l[1]); x.lineTo(l[2],l[3]); x.stroke();
-        });
-        // Reflection
-        x.globalAlpha=0.15; x.scale(1,-0.3);
-        x.drawImage(c,0,-900); x.setTransform(1,0,0,1,0,0); x.globalAlpha=1;
-
-      } else if (style === 1) {
-        // Nautical chart / map style
-        x.fillStyle='#f0e8d0'; x.fillRect(0,0,600,400);
-        // Aged paper texture
-        for (var ai=0; ai<3000; ai++) {
-          x.fillStyle='rgba(139,110,60,'+(Math.random()*0.04)+')';
-          x.fillRect(Math.random()*600,Math.random()*400,2,2);
-        }
-        // Border
-        x.strokeStyle='#8a6820'; x.lineWidth=3;
-        x.strokeRect(12,12,576,376);
-        x.strokeStyle='#a07828'; x.lineWidth=1; x.strokeRect(18,18,564,364);
-        // Compass rose
-        var cx2=480, cy2=300, cr=55;
-        x.strokeStyle='#5a3808'; x.fillStyle='#5a3808'; x.lineWidth=1.5;
-        for (var di=0; di<8; di++) {
-          var ang=(di/8)*Math.PI*2;
-          x.beginPath(); x.moveTo(cx2,cy2);
-          x.lineTo(cx2+Math.cos(ang)*cr,cy2+Math.sin(ang)*cr);
-          x.stroke();
-        }
-        x.beginPath(); x.arc(cx2,cy2,cr*0.18,0,Math.PI*2); x.fill();
-        x.fillStyle='#8a1010';
-        x.beginPath(); x.moveTo(cx2,cy2-cr); x.lineTo(cx2-8,cy2); x.lineTo(cx2,cy2-cr*0.3); x.closePath(); x.fill();
-        // Landmasses
-        x.fillStyle='rgba(180,160,100,0.5)';
-        x.beginPath(); x.moveTo(40,40); x.bezierCurveTo(120,60,160,100,140,150);
-        x.bezierCurveTo(120,200,60,210,40,180); x.closePath(); x.fill();
-        x.beginPath(); x.moveTo(200,40); x.bezierCurveTo(280,50,340,80,360,120);
-        x.bezierCurveTo(380,160,350,200,300,210); x.bezierCurveTo(250,220,200,190,190,150);
-        x.bezierCurveTo(180,110,190,70,200,40); x.closePath(); x.fill();
-        // Depth soundings
-        x.fillStyle='#2a5088'; x.font='bold 10px Georgia';
-        [[90,280,'14f'],[160,320,'22f'],[250,300,'38f'],[340,280,'45f'],[420,240,'52f'],
-         [100,360,'18f'],[280,370,'41f']].forEach(function(d){
-          x.fillText(d[2],d[0],d[1]);
-        });
-        // Dotted shipping lanes
-        x.setLineDash([4,6]); x.strokeStyle='rgba(80,80,160,0.5)'; x.lineWidth=1.5;
-        x.beginPath(); x.moveTo(40,250); x.bezierCurveTo(200,230,350,260,560,220); x.stroke();
-        x.beginPath(); x.moveTo(40,290); x.bezierCurveTo(180,310,340,300,560,270); x.stroke();
-        x.setLineDash([]);
-        // Title
-        x.fillStyle='#3a2008'; x.font='italic bold 18px Georgia';
-        x.fillText('Chart of the Northern Waters', 30, 390);
-        x.font='11px Georgia'; x.fillText('Surveyed 1887', 30, 370);
-
-      } else if (style === 2) {
-        // Stormy sea — dramatic oil painting
-        var bg=x.createLinearGradient(0,0,0,400);
-        bg.addColorStop(0,'#1a1820'); bg.addColorStop(0.4,'#2a3040'); bg.addColorStop(0.7,'#1e3050'); bg.addColorStop(1,'#0a1828');
-        x.fillStyle=bg; x.fillRect(0,0,600,400);
-        // Lightning
-        x.strokeStyle='rgba(220,240,255,0.7)'; x.lineWidth=2;
-        x.beginPath(); x.moveTo(480,0); x.lineTo(465,80); x.lineTo(478,80); x.lineTo(458,160); x.stroke();
-        x.globalAlpha=0.15; x.fillStyle='rgba(200,220,255,1)'; x.fillRect(420,0,80,200); x.globalAlpha=1;
-        // Storm clouds
-        x.fillStyle='rgba(30,30,48,0.85)';
-        [[100,30,160,50],[300,20,180,55],[500,35,130,45],[200,60,140,40],[420,65,120,38]].forEach(function(cl){
-          x.beginPath(); x.ellipse(cl[0],cl[1],cl[2],cl[3],0,0,Math.PI*2); x.fill();
-        });
-        // Rain streaks
-        x.strokeStyle='rgba(140,170,200,0.2)'; x.lineWidth=0.8;
-        for (var ri=0; ri<80; ri++) {
-          x.beginPath();
-          var rx2=Math.random()*600, ry=Math.random()*250;
-          x.moveTo(rx2,ry); x.lineTo(rx2-8,ry+40); x.stroke();
-        }
-        // Raging sea
-        var sea2=x.createLinearGradient(0,210,0,400);
-        sea2.addColorStop(0,'#1e4060'); sea2.addColorStop(1,'#0a1a28');
-        x.fillStyle=sea2; x.fillRect(0,210,600,190);
-        // White caps
-        x.fillStyle='rgba(200,220,240,0.7)';
-        for (var wc2=0; wc2<25; wc2++) {
-          var wcx=Math.random()*600, wcy=215+Math.random()*170;
-          x.beginPath(); x.ellipse(wcx,wcy,20+Math.random()*30,4+Math.random()*6,0,0,Math.PI*2); x.fill();
-        }
-        // Ship silhouette in distance
-        x.fillStyle='rgba(15,15,20,0.9)';
-        x.beginPath(); x.moveTo(260,215); x.lineTo(340,215); x.lineTo(348,228); x.lineTo(252,228); x.closePath(); x.fill();
-        x.strokeStyle='rgba(15,15,20,0.9)'; x.lineWidth=2;
-        x.beginPath(); x.moveTo(285,215); x.lineTo(282,175); x.stroke();
-        x.beginPath(); x.moveTo(315,215); x.lineTo(313,180); x.stroke();
-
-      } else {
-        // Sunset harbour — warm impressionist
-        var bg3=x.createLinearGradient(0,0,0,400);
-        bg3.addColorStop(0,'#1a1030'); bg3.addColorStop(0.3,'#8a2e08'); bg3.addColorStop(0.55,'#d86010'); bg3.addColorStop(0.75,'#f0a030'); bg3.addColorStop(1,'#e87820');
-        x.fillStyle=bg3; x.fillRect(0,0,600,400);
-        // Sun
-        x.beginPath(); x.arc(300,195,38,0,Math.PI*2);
-        var sg=x.createRadialGradient(300,195,0,300,195,38);
-        sg.addColorStop(0,'rgba(255,240,150,1)'); sg.addColorStop(1,'rgba(255,180,60,0.8)');
-        x.fillStyle=sg; x.fill();
-        // Glow
-        var glow=x.createRadialGradient(300,195,0,300,195,130);
-        glow.addColorStop(0,'rgba(255,200,80,0.25)'); glow.addColorStop(1,'rgba(255,100,20,0)');
-        x.fillStyle=glow; x.fillRect(170,65,260,260);
-        // Water
-        var sea3=x.createLinearGradient(0,260,0,400);
-        sea3.addColorStop(0,'#2a4870'); sea3.addColorStop(1,'#0e1c30');
-        x.fillStyle=sea3; x.fillRect(0,260,600,140);
-        // Reflection
-        x.fillStyle='rgba(240,160,40,0.35)'; x.fillRect(255,265,90,80);
-        x.fillStyle='rgba(240,160,40,0.15)'; x.fillRect(220,345,160,55);
-        // Harbour silhouette
-        x.fillStyle='rgba(10,8,15,0.92)';
-        // Buildings/dock
-        [[0,180,80,260],[80,200,40,260],[120,190,60,260],[0,240,600,260]].forEach(function(r){
-          x.fillRect(r[0],r[1],r[2],r[3]-r[1]);
-        });
-        x.fillRect(500,170,40,260); x.fillRect(540,185,35,260); x.fillRect(565,195,35,260);
-        // Masts in harbour
-        x.strokeStyle='rgba(10,8,15,0.85)'; x.lineWidth=2;
-        [[160,240,160,140],[185,245,185,150],[420,240,420,145],[445,245,445,158]].forEach(function(l){
-          x.beginPath(); x.moveTo(l[0],l[1]); x.lineTo(l[2],l[3]); x.stroke();
-        });
-        // Dabs of light impressionist style
-        var cols2=['#f5c030','#e87020','#f08040'];
-        for (var di2=0; di2<60; di2++) {
-          x.fillStyle=cols2[Math.floor(Math.random()*3)];
-          x.globalAlpha=0.5+Math.random()*0.4;
-          x.beginPath(); x.arc(Math.random()*600,265+Math.random()*135,1.5+Math.random()*4,0,Math.PI*2); x.fill();
-        }
-        x.globalAlpha=1;
-      }
-      var t = new THREE.CanvasTexture(c);
-      t.encoding = THREE.sRGBEncoding;
+      var t=new THREE.CanvasTexture(c);
+      t.encoding=THREE.sRGBEncoding;
       return t;
     }
 
-    // ── Build yacht saloon ────────────────────────────────────────────────
+    // ── Art ───────────────────────────────────────────────────────────────
+    function makeArt(style) {
+      var c=document.createElement('canvas'); c.width=700; c.height=480;
+      var x=c.getContext('2d');
 
-    // Floor — teak & holly
-    var floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(W, D),
-      new THREE.MeshStandardMaterial({ map: makeTeakFloor(), roughness: 0.78, metalness: 0 })
-    );
-    floor.rotation.x = -Math.PI/2; floor.position.y = -hh;
-    floor.receiveShadow = true; scene.add(floor);
+      if (style===0) {
+        // Tall ship — old master oil painting
+        var bg=x.createLinearGradient(0,0,0,480);
+        bg.addColorStop(0,'#0e1624'); bg.addColorStop(0.35,'#1e3858'); bg.addColorStop(0.65,'#5888a8'); bg.addColorStop(1,'#3868a0');
+        x.fillStyle=bg; x.fillRect(0,0,700,480);
+        // Clouds — textured
+        x.fillStyle='rgba(200,215,230,0.5)';
+        [[90,55,120,38],[280,38,140,32],[480,52,110,30],[200,80,80,22],[390,82,95,26]].forEach(function(cl){
+          for(var ci=0;ci<5;ci++){x.beginPath();x.ellipse(cl[0]+(Math.random()-0.5)*cl[2]*.6,cl[1]+(Math.random()-0.5)*cl[3],cl[2]*.5+Math.random()*cl[2]*.3,cl[3]*.6+Math.random()*cl[3]*.3,0,0,Math.PI*2);x.globalAlpha=0.3+Math.random()*0.3;x.fill();}
+        });
+        x.globalAlpha=1;
+        // Sea
+        var sea2=x.createLinearGradient(0,260,0,480);
+        sea2.addColorStop(0,'#1e4878'); sea2.addColorStop(1,'#081828');
+        x.fillStyle=sea2; x.fillRect(0,265,700,215);
+        x.strokeStyle='rgba(140,190,230,0.35)'; x.lineWidth=1.8;
+        for(var wy=278;wy<475;wy+=16){x.beginPath();for(var wx=0;wx<700;wx+=50){x.moveTo(wx,wy);x.quadraticCurveTo(wx+12,wy-5,wx+25,wy);x.quadraticCurveTo(wx+38,wy+5,wx+50,wy);}x.stroke();}
+        // Hull
+        x.fillStyle='#0a0806';
+        x.beginPath(); x.moveTo(240,262); x.lineTo(460,262); x.lineTo(478,288); x.lineTo(222,288); x.closePath(); x.fill();
+        x.fillStyle='rgba(165,45,25,0.9)';
+        x.beginPath(); x.moveTo(245,257); x.lineTo(455,257); x.lineTo(460,262); x.lineTo(240,262); x.closePath(); x.fill();
+        // Gunports
+        x.fillStyle='rgba(0,0,0,0.7)';
+        [268,298,328,358,388,418].forEach(function(gx){x.fillRect(gx,260,14,8);});
+        // Masts
+        x.strokeStyle='#4a2e08'; x.lineWidth=4.5;
+        [[288,257,282,68],[350,257,348,55],[408,257,405,75]].forEach(function(m){x.beginPath();x.moveTo(m[0],m[1]);x.lineTo(m[2],m[3]);x.stroke();});
+        x.lineWidth=2;
+        [[282,68,348,55],[348,55,405,75]].forEach(function(m){x.beginPath();x.moveTo(m[0],m[1]);x.lineTo(m[2],m[3]);x.stroke();});
+        // Sails — cream with age
+        [['#f0e8c8',282,72,340,105,288,257,282,72],['#ece0b8',282,72,232,115,270,257,282,72]].forEach(function(s){
+          x.fillStyle=s[0]; x.beginPath(); x.moveTo(s[1],s[2]); x.quadraticCurveTo(s[3],s[4],s[5],s[6]); x.lineTo(s[1],s[2]); x.fill();
+        });
+        x.fillStyle='#f0e8c8';
+        [[348,58,408,90,408,257,348,58],[348,58,292,95,290,257,348,58],[405,78,448,105,450,255,405,78]].forEach(function(s){
+          x.beginPath(); x.moveTo(s[0],s[1]); x.quadraticCurveTo(s[2],s[3],s[4],s[5]); x.lineTo(s[0],s[1]); x.closePath(); x.fill();
+        });
+        // Rigging
+        x.strokeStyle='rgba(50,28,8,0.55)'; x.lineWidth=1;
+        [[282,68,220,288],[282,68,478,288],[348,55,220,288],[348,55,478,288],[405,75,478,288]].forEach(function(l){x.beginPath();x.moveTo(l[0],l[1]);x.lineTo(l[2],l[3]);x.stroke();});
+        // Vignette edges (oil painting feel)
+        var vig=x.createRadialGradient(350,240,100,350,240,370);
+        vig.addColorStop(0,'rgba(0,0,0,0)'); vig.addColorStop(1,'rgba(0,0,0,0.55)');
+        x.fillStyle=vig; x.fillRect(0,0,700,480);
 
-    // Ceiling — cream liner
-    var ceil = new THREE.Mesh(
-      new THREE.PlaneGeometry(W, D),
-      new THREE.MeshStandardMaterial({ map: makeCeilingMap(), roughness: 0.88, metalness: 0 })
-    );
-    ceil.rotation.x = Math.PI/2; ceil.position.y = hh;
-    ceil.receiveShadow = true; scene.add(ceil);
+      } else if (style===1) {
+        // Vintage nautical chart
+        var aged=x.createLinearGradient(0,0,700,480);
+        aged.addColorStop(0,'#f2e8c8'); aged.addColorStop(0.5,'#eeddb8'); aged.addColorStop(1,'#e8d4a8');
+        x.fillStyle=aged; x.fillRect(0,0,700,480);
+        // Water texture (light blue wash)
+        x.fillStyle='rgba(140,180,220,0.18)'; x.fillRect(0,0,700,480);
+        // Age stains
+        for(var ai=0;ai<2000;ai++){
+          x.fillStyle='rgba('+(100+Math.floor(Math.random()*60))+','+(80+Math.floor(Math.random()*40))+',30,'+(Math.random()*0.05)+')';
+          x.fillRect(Math.random()*700,Math.random()*480,2+Math.random()*4,1+Math.random()*3);
+        }
+        // Border
+        x.strokeStyle='#7a5c18'; x.lineWidth=3.5; x.strokeRect(14,14,672,452);
+        x.strokeStyle='#a07828'; x.lineWidth=1; x.strokeRect(20,20,660,440);
+        // Coastlines
+        x.strokeStyle='#5a3808'; x.lineWidth=1.5; x.fillStyle='rgba(180,158,100,0.45)';
+        x.beginPath(); x.moveTo(30,30); x.bezierCurveTo(100,55,130,110,110,165); x.bezierCurveTo(90,220,40,235,30,210); x.closePath(); x.fill(); x.stroke();
+        x.beginPath(); x.moveTo(180,30); x.bezierCurveTo(260,48,320,85,340,140); x.bezierCurveTo(360,195,330,240,280,250); x.bezierCurveTo(230,260,190,230,180,180); x.bezierCurveTo(170,130,178,70,180,30); x.closePath(); x.fill(); x.stroke();
+        x.beginPath(); x.moveTo(500,30); x.bezierCurveTo(570,50,620,100,630,150); x.bezierCurveTo(640,200,610,240,670,260); x.lineTo(670,30); x.closePath(); x.fill(); x.stroke();
+        // Depth soundings
+        x.fillStyle='#1a3050'; x.font='bold 11px Georgia';
+        [[80,310,'14f'],[140,350,'22f'],[220,330,'35f'],[310,340,'48f'],[390,310,'55f'],[460,355,'62f'],[80,420,'17f'],[250,430,'40f'],[400,420,'58f']].forEach(function(d){x.fillText(d[2],d[0],d[1]);});
+        // Shipping lanes
+        x.setLineDash([5,7]); x.strokeStyle='rgba(70,80,160,0.5)'; x.lineWidth=1.5;
+        x.beginPath(); x.moveTo(30,285); x.bezierCurveTo(200,265,380,295,670,250); x.stroke();
+        x.beginPath(); x.moveTo(30,330); x.bezierCurveTo(200,350,380,335,670,300); x.stroke();
+        x.setLineDash([]);
+        // Compass rose
+        var crx=570,cry=380,crr=58;
+        x.strokeStyle='#5a3808'; x.fillStyle='#5a3808'; x.lineWidth=1.5;
+        for(var di=0;di<16;di++){var ang=(di/16)*Math.PI*2;x.beginPath();x.moveTo(crx,cry);x.lineTo(crx+Math.cos(ang)*crr*(di%4===0?1:0.65),cry+Math.sin(ang)*crr*(di%4===0?1:0.65));x.stroke();}
+        x.beginPath(); x.arc(crx,cry,crr*0.15,0,Math.PI*2); x.fill();
+        x.fillStyle='#8a1010';
+        x.beginPath(); x.moveTo(crx,cry-crr); x.lineTo(crx-9,cry); x.lineTo(crx,cry-crr*.28); x.closePath(); x.fill();
+        x.fillStyle='#f2e8c8';
+        x.beginPath(); x.moveTo(crx,cry+crr); x.lineTo(crx-9,cry); x.lineTo(crx,cry+crr*.28); x.closePath(); x.fill();
+        x.fillStyle='#3a2008'; x.font='bold 8px Georgia'; x.fillText('N',crx-4,cry-crr-4); x.fillText('S',crx-3,cry+crr+10); x.fillText('E',crx+crr+4,cry+3); x.fillText('W',crx-crr-14,cry+3);
+        // Title cartouche
+        x.fillStyle='rgba(240,224,180,0.85)'; x.strokeStyle='#7a5c18'; x.lineWidth=2;
+        x.beginPath(); x.roundRect(30,380,260,80,8); x.fill(); x.stroke();
+        x.fillStyle='#3a2008'; x.font='bold italic 14px Georgia'; x.fillText('Chart of Northern Waters',40,402);
+        x.font='11px Georgia'; x.fillText('As Surveyed by Capt. J. Wilde, 1887',40,420);
+        x.font='9px Georgia'; x.fillText('Scale: 1 inch = 12 nautical miles',40,436);
 
-    // Hull walls — white lacquer with teak trim
-    var hullMat = new THREE.MeshStandardMaterial({ map: makeHullWall(), roughness: 0.35, metalness: 0.05 });
-    function addWall(ww, wh, pos, rotY, mat) {
-      var m = new THREE.Mesh(new THREE.PlaneGeometry(ww, wh), mat || hullMat);
-      m.position.set(pos[0],pos[1],pos[2]); m.rotation.y = rotY;
-      m.receiveShadow = true; scene.add(m);
+      } else if (style===2) {
+        // Storm at sea — dramatic chiaroscuro
+        x.fillStyle='#060810'; x.fillRect(0,0,700,480);
+        var stormBg=x.createLinearGradient(0,0,0,480);
+        stormBg.addColorStop(0,'#0c0e18'); stormBg.addColorStop(0.3,'#141c2e'); stormBg.addColorStop(0.6,'#0e1828'); stormBg.addColorStop(1,'#060c18');
+        x.fillStyle=stormBg; x.fillRect(0,0,700,480);
+        // Lightning (brightest point)
+        var lx2=550,ly=0,lx3=530,ly2=100;
+        x.strokeStyle='rgba(210,230,255,0.85)'; x.lineWidth=2.5;
+        x.beginPath(); x.moveTo(lx2,ly); x.lineTo(lx3,ly2); x.lineTo(lx3+18,ly2); x.lineTo(lx3-5,ly2+90); x.stroke();
+        var lglow=x.createRadialGradient(lx3,ly2,0,lx3,ly2+45,160);
+        lglow.addColorStop(0,'rgba(180,210,255,0.35)'); lglow.addColorStop(1,'rgba(0,0,0,0)');
+        x.fillStyle=lglow; x.fillRect(380,0,320,300);
+        // Heavy storm clouds
+        [['rgba(15,18,28,0.9)',120,38,160,52],['rgba(20,25,38,0.9)',320,22,195,58],
+         ['rgba(12,16,24,0.95)',530,40,145,48],['rgba(18,22,35,0.85)',220,65,145,40],
+         ['rgba(14,18,28,0.9)',440,68,130,38]].forEach(function(cl){
+          x.fillStyle=cl[0]; x.beginPath(); x.ellipse(cl[1],cl[2],cl[3],cl[4],0,0,Math.PI*2); x.fill();
+        });
+        // Rain
+        x.strokeStyle='rgba(130,160,200,0.2)'; x.lineWidth=0.7;
+        for(var ri=0;ri<100;ri++){var rx2=Math.random()*700,ry2=Math.random()*270;x.beginPath();x.moveTo(rx2,ry2);x.lineTo(rx2-9,ry2+50);x.stroke();}
+        // Sea
+        var stormSea=x.createLinearGradient(0,220,0,480);
+        stormSea.addColorStop(0,'#141c2e'); stormSea.addColorStop(1,'#060a10');
+        x.fillStyle=stormSea; x.fillRect(0,222,700,258);
+        // Wave peaks
+        x.fillStyle='rgba(180,210,240,0.6)';
+        for(var wc=0;wc<22;wc++){var wcx=Math.random()*700,wcy=228+Math.random()*200;x.beginPath();x.ellipse(wcx,wcy,22+Math.random()*40,4+Math.random()*7,0,0,Math.PI*2);x.fill();}
+        // Distant ship silhouette
+        x.fillStyle='rgba(8,10,16,0.95)';
+        x.beginPath(); x.moveTo(275,225); x.lineTo(420,225); x.lineTo(435,245); x.lineTo(260,245); x.closePath(); x.fill();
+        x.strokeStyle='rgba(8,10,16,0.9)'; x.lineWidth=2.5;
+        [[305,225,300,175],[360,225,357,168],[410,225,408,178]].forEach(function(m){x.beginPath();x.moveTo(m[0],m[1]);x.lineTo(m[2],m[3]);x.stroke();});
+        // Dramatic vignette
+        var dvig=x.createRadialGradient(350,240,60,350,240,380);
+        dvig.addColorStop(0,'rgba(0,0,0,0)'); dvig.addColorStop(1,'rgba(0,0,0,0.75)');
+        x.fillStyle=dvig; x.fillRect(0,0,700,480);
+
+      } else {
+        // Golden harbour — warm impressionist
+        var hSky=x.createLinearGradient(0,0,0,480);
+        hSky.addColorStop(0,'#140c22'); hSky.addColorStop(0.25,'#6a1e08'); hSky.addColorStop(0.5,'#c85008'); hSky.addColorStop(0.68,'#e88018'); hSky.addColorStop(0.8,'#f0b030'); hSky.addColorStop(1,'#d86818');
+        x.fillStyle=hSky; x.fillRect(0,0,700,480);
+        // Sun
+        x.beginPath(); x.arc(350,215,45,0,Math.PI*2);
+        var sunG=x.createRadialGradient(350,215,0,350,215,45);
+        sunG.addColorStop(0,'rgba(255,248,180,1)'); sunG.addColorStop(0.6,'rgba(255,200,80,0.9)'); sunG.addColorStop(1,'rgba(255,140,40,0)');
+        x.fillStyle=sunG; x.fill();
+        var hGlow=x.createRadialGradient(350,215,0,350,215,160);
+        hGlow.addColorStop(0,'rgba(255,200,80,0.3)'); hGlow.addColorStop(1,'rgba(255,80,20,0)');
+        x.fillStyle=hGlow; x.fillRect(190,55,320,320);
+        // Water
+        var hWater=x.createLinearGradient(0,290,0,480);
+        hWater.addColorStop(0,'#1e3860'); hWater.addColorStop(1,'#080e20');
+        x.fillStyle=hWater; x.fillRect(0,292,700,188);
+        // Golden reflection
+        x.fillStyle='rgba(240,168,48,0.42)'; x.fillRect(300,296,100,90);
+        x.fillStyle='rgba(240,168,48,0.2)'; x.fillRect(260,386,180,60);
+        // Wave shimmer
+        x.strokeStyle='rgba(240,200,100,0.25)'; x.lineWidth=1.2;
+        for(var wy=305;wy<475;wy+=14){x.beginPath();for(var wx=0;wx<700;wx+=42){x.moveTo(wx,wy);x.quadraticCurveTo(wx+10,wy-3.5,wx+21,wy);x.quadraticCurveTo(wx+32,wy+3.5,wx+42,wy);}x.stroke();}
+        // Harbour skyline silhouette
+        x.fillStyle='rgba(8,6,14,0.94)';
+        [[0,180,75,300],[75,200,45,300],[120,188,65,300],[0,268,700,300]].forEach(function(r){x.fillRect(r[0],r[1],r[2],300);});
+        x.fillRect(540,165,50,300); x.fillRect(590,178,42,300); x.fillRect(632,192,68,300);
+        // Masts in silhouette
+        x.strokeStyle='rgba(8,6,14,0.92)'; x.lineWidth=2;
+        [[200,268,196,155],[225,270,222,162],[450,268,447,150],[478,270,475,160]].forEach(function(l){x.beginPath();x.moveTo(l[0],l[1]);x.lineTo(l[2],l[3]);x.stroke();});
+        // Impressionist dabs of reflected light
+        var dabs=['#f5c030','#e87020','#f09050','#d85010'];
+        for(var di3=0;di3<80;di3++){x.fillStyle=dabs[Math.floor(Math.random()*4)];x.globalAlpha=0.4+Math.random()*0.5;x.beginPath();x.arc(Math.random()*700,296+Math.random()*184,1+Math.random()*4.5,0,Math.PI*2);x.fill();}
+        x.globalAlpha=1;
+        var hvig=x.createRadialGradient(350,240,80,350,240,380);
+        hvig.addColorStop(0,'rgba(0,0,0,0)'); hvig.addColorStop(1,'rgba(0,0,0,0.5)');
+        x.fillStyle=hvig; x.fillRect(0,0,700,480);
+      }
+      var t=new THREE.CanvasTexture(c); t.encoding=THREE.sRGBEncoding; return t;
     }
-    addWall(W, H, [0,0,-hd],  0);
-    addWall(W, H, [0,0, hd],  Math.PI);
-    addWall(D, H, [-hw,0,0],  Math.PI/2);
-    addWall(D, H, [ hw,0,0], -Math.PI/2);
 
-    // Teak handrail / grab rail along sides
-    var brassMat = new THREE.MeshStandardMaterial({ color: 0xb8920a, roughness: 0.18, metalness: 0.9 });
-    var teakRailMat = new THREE.MeshStandardMaterial({ color: 0x6a3c0e, roughness: 0.55, metalness: 0 });
-    [-hw+0.06, hw-0.06].forEach(function(rx) {
-      var rail = new THREE.Mesh(new THREE.CylinderGeometry(0.018,0.018,D-0.4,8), teakRailMat);
-      rail.rotation.x = Math.PI/2; rail.position.set(rx, hh-0.35, 0); scene.add(rail);
-      // Stanchions
-      for (var si=-3; si<=3; si++) {
-        var stan = new THREE.Mesh(new THREE.CylinderGeometry(0.012,0.012,0.22,6), brassMat);
-        stan.position.set(rx, hh-0.46, si*1.0); scene.add(stan);
+    // ── Scene construction ────────────────────────────────────────────────
+
+    var BRASS  = new THREE.MeshStandardMaterial({ color:0xb8920a, roughness:0.12, metalness:0.92 });
+    var TEAK   = new THREE.MeshStandardMaterial({ color:0x5a3008, roughness:0.55, metalness:0.0  });
+    var NAVY   = new THREE.MeshStandardMaterial({ color:0x18243c, roughness:0.90, metalness:0.0  });
+    var CREAM  = new THREE.MeshStandardMaterial({ color:0xf0ece2, roughness:0.32, metalness:0.05 });
+    var CHROME = new THREE.MeshStandardMaterial({ color:0xd0d4d8, roughness:0.08, metalness:0.96 });
+    var GLASS  = new THREE.MeshStandardMaterial({ color:0x90b8d8, transparent:true, opacity:0.22, roughness:0.04, metalness:0.1 });
+
+    // Floor — MeshPhysicalMaterial with clearcoat (varnished teak)
+    var floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(W, D, 1, 1),
+      new THREE.MeshPhysicalMaterial({
+        map: makeTeakFloor(),
+        roughness: 0.55,
+        metalness: 0.0,
+        clearcoat: 0.85,
+        clearcoatRoughness: 0.12
+      })
+    );
+    floor.rotation.x=-Math.PI/2; floor.position.y=-hh;
+    floor.receiveShadow=true; scene.add(floor);
+
+    // Ceiling
+    var ceil=new THREE.Mesh(new THREE.PlaneGeometry(W,D), new THREE.MeshStandardMaterial({ map:makeCeilingTex(), roughness:0.85 }));
+    ceil.rotation.x=Math.PI/2; ceil.position.y=hh; scene.add(ceil);
+
+    // Hull walls — low roughness for lacquer sheen
+    var hullMat=new THREE.MeshStandardMaterial({ map:makeHullWall(), roughness:0.28, metalness:0.06 });
+    function wall(ww,wh,pos,rotY,mat){
+      var m=new THREE.Mesh(new THREE.PlaneGeometry(ww,wh),mat||hullMat);
+      m.position.set(pos[0],pos[1],pos[2]); m.rotation.y=rotY; m.receiveShadow=true; scene.add(m);
+    }
+    wall(W,H,[0,0,-hd],0);
+    wall(W,H,[0,0, hd],Math.PI);
+    wall(D,H,[-hw,0,0], Math.PI/2);
+    wall(D,H,[ hw,0,0],-Math.PI/2);
+
+    // ── Grab rails ────────────────────────────────────────────────────────
+    [-hw+0.06,hw-0.06].forEach(function(rx){
+      var rail=new THREE.Mesh(new THREE.CylinderGeometry(0.016,0.016,D-0.6,10),TEAK);
+      rail.rotation.x=Math.PI/2; rail.position.set(rx,hh-0.38,0); scene.add(rail);
+      for(var si=-3;si<=3;si++){
+        var stan=new THREE.Mesh(new THREE.CylinderGeometry(0.011,0.011,0.24,8),BRASS);
+        stan.position.set(rx,hh-0.5,si*1.05); scene.add(stan);
       }
     });
+
+    // ── Teak base trim ────────────────────────────────────────────────────
+    var BH=0.14,BD=0.05;
+    [[W,BH,BD,[0,-hh+BH/2,-hd+BD/2],0],[W,BH,BD,[0,-hh+BH/2,hd-BD/2],Math.PI],
+     [D,BH,BD,[-hw+BD/2,-hh+BH/2,0],Math.PI/2],[D,BH,BD,[hw-BD/2,-hh+BH/2,0],-Math.PI/2]
+    ].forEach(function(b){var m=new THREE.Mesh(new THREE.BoxGeometry(b[0],b[1],b[2]),TEAK);m.position.set(b[3][0],b[3][1],b[3][2]);m.rotation.y=b[4];scene.add(m);});
 
     // ── Portholes ─────────────────────────────────────────────────────────
-    var portholeMat = new THREE.MeshStandardMaterial({ color: 0xb8920a, roughness: 0.15, metalness: 0.9 });
-    var glassMat  = new THREE.MeshStandardMaterial({ color: 0x88c0e8, transparent: true, opacity: 0.3, roughness: 0.05 });
-    var oceanMat  = new THREE.MeshStandardMaterial({ map: makeOceanView(), roughness: 0.1 });
-
-    [-1.5, 0.8].forEach(function(pz, pi) {
-      var pg = new THREE.Group();
-      pg.position.set(-hw+0.01, 0.25, pz);
-      pg.rotation.y = Math.PI/2;
-      // Ocean view backing
-      var ocean = new THREE.Mesh(new THREE.CircleGeometry(0.26, 32), oceanMat);
-      ocean.position.z = -0.01; pg.add(ocean);
+    var oceanTex=makeOceanTex();
+    function addPorthole(px,py,pz,rotY) {
+      var pg=new THREE.Group(); pg.position.set(px,py,pz); pg.rotation.y=rotY;
+      // Ocean backing
+      pg.add(Object.assign(new THREE.Mesh(new THREE.CircleGeometry(0.28,40),new THREE.MeshStandardMaterial({map:oceanTex,roughness:0.05})),{position:{x:0,y:0,z:-0.02}}));
       // Glass
-      var glass = new THREE.Mesh(new THREE.CircleGeometry(0.24, 32), glassMat);
-      glass.position.z = 0.02; pg.add(glass);
-      // Brass ring outer
-      var ring = new THREE.Mesh(
-        new THREE.RingGeometry(0.24, 0.32, 32),
-        portholeMat
-      );
-      ring.position.z = 0.03; pg.add(ring);
-      // Bolts
-      for (var bi=0; bi<8; bi++) {
-        var ba = (bi/8)*Math.PI*2;
-        var bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.018,0.018,0.025,6), portholeMat);
-        bolt.position.set(Math.cos(ba)*0.295, Math.sin(ba)*0.295, 0.03);
-        bolt.rotation.x = Math.PI/2; pg.add(bolt);
+      var gm=new THREE.Mesh(new THREE.CircleGeometry(0.26,40),GLASS);
+      gm.position.z=0.01; pg.add(gm);
+      // Porthole glow (emissive ring to help bloom)
+      var glow=new THREE.Mesh(new THREE.CircleGeometry(0.28,40),new THREE.MeshBasicMaterial({color:0x88c8ff,transparent:true,opacity:0.12}));
+      glow.position.z=0.005; pg.add(glow);
+      // Outer brass ring
+      var outerRing=new THREE.Mesh(new THREE.RingGeometry(0.26,0.34,40),BRASS); outerRing.position.z=0.02; pg.add(outerRing);
+      // Dogging ring (inner rotating seal ring)
+      var dogRing=new THREE.Mesh(new THREE.RingGeometry(0.26,0.295,40),CHROME); dogRing.position.z=0.03; pg.add(dogRing);
+      // Dogging bolts
+      for(var bi=0;bi<8;bi++){
+        var ba=(bi/8)*Math.PI*2;
+        var bolt=new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.02,0.03,8),BRASS);
+        bolt.position.set(Math.cos(ba)*0.31,Math.sin(ba)*0.31,0.03); bolt.rotation.x=Math.PI/2; pg.add(bolt);
+        var bHead=new THREE.Mesh(new THREE.CylinderGeometry(0.025,0.025,0.01,8),BRASS);
+        bHead.position.set(Math.cos(ba)*0.31,Math.sin(ba)*0.31,0.045); bHead.rotation.x=Math.PI/2; pg.add(bHead);
       }
-      // Hinge
-      var hinge = new THREE.Mesh(new THREE.BoxGeometry(0.04,0.1,0.04), portholeMat);
-      hinge.position.set(0, 0.3, 0.03); pg.add(hinge);
+      // Hinge dogs
+      var h1=new THREE.Mesh(new THREE.BoxGeometry(0.04,0.12,0.04),BRASS); h1.position.set(0,0.32,0.025); pg.add(h1);
+      var h2=new THREE.Mesh(new THREE.BoxGeometry(0.04,0.12,0.04),BRASS); h2.position.set(0,-0.32,0.025); pg.add(h2);
+      // Porthole spotlight
+      var pspot=new THREE.SpotLight(0xffe8c8,3.8,6,Math.PI/8,0.45,1.8);
+      pspot.position.set(0,0,0.4);
+      pspot.target.position.set(0,0,5);
+      pg.add(pspot); pg.add(pspot.target);
       scene.add(pg);
-    });
-
-    // Right side porthole
-    var rpg = new THREE.Group();
-    rpg.position.set(hw-0.01, 0.25, -0.5);
-    rpg.rotation.y = -Math.PI/2;
-    var rocean = new THREE.Mesh(new THREE.CircleGeometry(0.26, 32), oceanMat);
-    rocean.position.z = -0.01; rpg.add(rocean);
-    var rglass = new THREE.Mesh(new THREE.CircleGeometry(0.24, 32), glassMat);
-    rglass.position.z = 0.02; rpg.add(rglass);
-    var rring = new THREE.Mesh(new THREE.RingGeometry(0.24, 0.32, 32), portholeMat);
-    rring.position.z = 0.03; rpg.add(rring);
-    for (var bi2=0; bi2<8; bi2++) {
-      var ba2=(bi2/8)*Math.PI*2;
-      var bolt2 = new THREE.Mesh(new THREE.CylinderGeometry(0.018,0.018,0.025,6), portholeMat);
-      bolt2.position.set(Math.cos(ba2)*0.295,Math.sin(ba2)*0.295,0.03); bolt2.rotation.x=Math.PI/2; rpg.add(bolt2);
     }
-    scene.add(rpg);
+    addPorthole(-hw+0.02,0.28,-1.8, Math.PI/2);
+    addPorthole(-hw+0.02,0.28, 0.8, Math.PI/2);
+    addPorthole( hw-0.02,0.28,-0.5,-Math.PI/2);
 
-    // Teak trim strips (floor level & ceiling)
-    var teakMat2 = new THREE.MeshStandardMaterial({ color: 0x6a3c0e, roughness: 0.55 });
-    var BD = 0.05, BH = 0.12;
-    [[W,BH,BD,[0,-hh+BH/2,-hd+BD/2],0],
-     [W,BH,BD,[0,-hh+BH/2, hd-BD/2],Math.PI],
-     [D,BH,BD,[-hw+BD/2,-hh+BH/2,0],Math.PI/2],
-     [D,BH,BD,[ hw-BD/2,-hh+BH/2,0],-Math.PI/2],
-    ].forEach(function(b) {
-      var m = new THREE.Mesh(new THREE.BoxGeometry(b[0],b[1],b[2]), teakMat2);
-      m.position.set(b[3][0],b[3][1],b[3][2]); m.rotation.y=b[4]; scene.add(m);
+    // ── Banquette ─────────────────────────────────────────────────────────
+    // Stern settee
+    var sg=new THREE.Group(); sg.position.set(0,-hh,-hd+0.52);
+    var sbBase=new THREE.Mesh(new THREE.BoxGeometry(W-0.4,0.44,0.72),TEAK);
+    sbBase.position.y=0.22; sbBase.castShadow=true; sg.add(sbBase);
+    var sbCush=new THREE.Mesh(new THREE.BoxGeometry(W-0.5,0.11,0.65),NAVY);
+    sbCush.position.set(0,0.49,0.03); sg.add(sbCush);
+    var sbBack=new THREE.Mesh(new THREE.BoxGeometry(W-0.5,0.58,0.09),NAVY);
+    sbBack.position.set(0,0.66,-0.32); sg.add(sbBack);
+    // Throw cushions
+    [-1.5,-0.5,0.5,1.5].forEach(function(cx){
+      var tc=new THREE.Mesh(new THREE.BoxGeometry(0.36,0.32,0.12),CREAM);
+      tc.position.set(cx,0.64,-0.28); tc.rotation.z=(Math.random()-.5)*.15; sg.add(tc);
     });
+    scene.add(sg);
 
-    // ── Banquette settee (U-shape) ────────────────────────────────────────
-    var navyMat  = new THREE.MeshStandardMaterial({ color: 0x1a2a4a, roughness: 0.92 });
-    var teakFurn = new THREE.MeshStandardMaterial({ color: 0x6a3c0e, roughness: 0.6 });
-
-    // Back banquette along stern (back wall)
-    var seatGroup = new THREE.Group();
-    seatGroup.position.set(0, -hh, -hd + 0.5);
-    // Base
-    var sBase = new THREE.Mesh(new THREE.BoxGeometry(W-0.3,0.42,0.7), teakFurn);
-    sBase.position.y = 0.21; sBase.castShadow = true; seatGroup.add(sBase);
-    // Seat cushion
-    var sCush = new THREE.Mesh(new THREE.BoxGeometry(W-0.38,0.1,0.64), navyMat);
-    sCush.position.set(0,0.47,0); seatGroup.add(sCush);
-    // Back cushion
-    var sBack = new THREE.Mesh(new THREE.BoxGeometry(W-0.38,0.55,0.1), navyMat);
-    sBack.position.set(0,0.62,-0.31); seatGroup.add(sBack);
-    scene.add(seatGroup);
-
-    // Side settee — port side
-    var ssGroup = new THREE.Group();
-    ssGroup.position.set(-hw+0.5, -hh, 0.4);
-    var ssBase = new THREE.Mesh(new THREE.BoxGeometry(0.65,0.42,3.2), teakFurn);
-    ssBase.position.set(0,0.21,0); ssBase.castShadow=true; ssGroup.add(ssBase);
-    var ssCush = new THREE.Mesh(new THREE.BoxGeometry(0.59,0.1,3.12), navyMat);
-    ssCush.position.set(0,0.47,0); ssGroup.add(ssCush);
-    var ssBack = new THREE.Mesh(new THREE.BoxGeometry(0.1,0.5,3.12), navyMat);
-    ssBack.position.set(-0.29,0.63,0); ssGroup.add(ssBack);
-    scene.add(ssGroup);
-
-    // ── Saloon table — teak with brass edge ───────────────────────────────
-    var tableGroup = new THREE.Group();
-    tableGroup.position.set(-0.2, -hh, -0.2);
-    var tTop = new THREE.Mesh(new THREE.BoxGeometry(1.1,0.05,0.65), teakFurn);
-    tTop.position.y=0.44; tTop.castShadow=true; tableGroup.add(tTop);
-    // Brass edge strip
-    var edge = new THREE.Mesh(new THREE.BoxGeometry(1.12,0.02,0.67), brassMat);
-    edge.position.y=0.465; tableGroup.add(edge);
-    // Pedestal base
-    var tPed = new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.08,0.38,8), teakFurn);
-    tPed.position.y=0.19; tableGroup.add(tPed);
-    var tFoot = new THREE.Mesh(new THREE.CylinderGeometry(0.22,0.22,0.04,12), teakFurn);
-    tFoot.position.y=0.02; tableGroup.add(tFoot);
-    scene.add(tableGroup);
-
-    // Items on table
-    var chartGroup = new THREE.Group();
-    chartGroup.position.set(-0.2, -hh+0.47, -0.2);
-    var chart = new THREE.Mesh(new THREE.PlaneGeometry(0.55,0.38), new THREE.MeshStandardMaterial({ color: 0xf0e8c8, roughness: 0.9 }));
-    chart.rotation.x=-Math.PI/2; chartGroup.add(chart);
-    scene.add(chartGroup);
-    // Coffee mug
-    var mugG = new THREE.Group(); mugG.position.set(0.2,-hh+0.475,0);
-    var mug = new THREE.Mesh(new THREE.CylinderGeometry(0.04,0.035,0.1,10), new THREE.MeshStandardMaterial({ color: 0xf4f0ea, roughness: 0.7 }));
-    mug.position.y=0.05; mugG.add(mug);
-    scene.add(mugG);
-
-    // ── Chart table / nav station (starboard aft) ─────────────────────────
-    var navGroup = new THREE.Group();
-    navGroup.position.set(hw-0.4, -hh, -hd+1.0);
-    var navDesk = new THREE.Mesh(new THREE.BoxGeometry(0.65,0.04,1.1), teakFurn);
-    navDesk.position.set(0,0.75,0); navDesk.castShadow=true; navGroup.add(navDesk);
-    var navBase = new THREE.Mesh(new THREE.BoxGeometry(0.65,0.75,0.06), teakFurn);
-    navBase.position.set(0,0.375,-0.52); navGroup.add(navBase);
-    var navSide = new THREE.Mesh(new THREE.BoxGeometry(0.04,0.75,1.0), teakFurn);
-    navSide.position.set(-0.305,0.375,0); navGroup.add(navSide);
-    // Instruments panel
-    var instPanel = new THREE.Mesh(new THREE.BoxGeometry(0.6,0.35,0.02), new THREE.MeshStandardMaterial({ color: 0x111820, roughness: 0.6, metalness: 0.3 }));
-    instPanel.position.set(0,0.6,-0.49); navGroup.add(instPanel);
-    // Instrument dials
-    [[-0.18,0.62],[0,0.62],[0.18,0.62],[-0.09,0.42],[0.09,0.42]].forEach(function(d) {
-      var dial = new THREE.Mesh(new THREE.CircleGeometry(0.055,16), new THREE.MeshStandardMaterial({ color: 0x0a1a30, roughness: 0.3 }));
-      dial.position.set(d[0],d[1],-0.48); navGroup.add(dial);
-      var dring = new THREE.Mesh(new THREE.RingGeometry(0.055,0.065,16), brassMat);
-      dring.position.set(d[0],d[1],-0.478); navGroup.add(dring);
+    // Port settee
+    var psg=new THREE.Group(); psg.position.set(-hw+0.52,-hh,0.5);
+    var psBase=new THREE.Mesh(new THREE.BoxGeometry(0.68,0.44,3.4),TEAK);
+    psBase.position.set(0,0.22,0); psBase.castShadow=true; psg.add(psBase);
+    var psCush=new THREE.Mesh(new THREE.BoxGeometry(0.61,0.11,3.3),NAVY);
+    psCush.position.set(0,0.49,0); psg.add(psCush);
+    var psBack=new THREE.Mesh(new THREE.BoxGeometry(0.09,0.54,3.3),NAVY);
+    psBack.position.set(-0.3,0.66,0); psg.add(psBack);
+    [0.8,0,-0.8].forEach(function(cz){
+      var tc2=new THREE.Mesh(new THREE.BoxGeometry(0.12,0.32,0.36),CREAM);
+      tc2.position.set(-0.28,0.66,cz); tc2.rotation.z=.15; psg.add(tc2);
     });
-    scene.add(navGroup);
+    scene.add(psg);
 
-    // Nav station stool
-    var stool = new THREE.Mesh(new THREE.CylinderGeometry(0.14,0.1,0.05,10), navyMat);
-    stool.position.set(hw-0.4,-hh+0.48,-hd+1.9); scene.add(stool);
-    var stoolPed = new THREE.Mesh(new THREE.CylinderGeometry(0.025,0.03,0.44,8), brassMat);
-    stoolPed.position.set(hw-0.4,-hh+0.22,-hd+1.9); scene.add(stoolPed);
+    // ── Saloon table ──────────────────────────────────────────────────────
+    var tg=new THREE.Group(); tg.position.set(-0.15,-hh,-0.1);
+    var tTop=new THREE.Mesh(new THREE.BoxGeometry(1.1,0.048,0.68),new THREE.MeshPhysicalMaterial({color:0x5a3008,roughness:0.45,metalness:0,clearcoat:0.7,clearcoatRoughness:0.08}));
+    tTop.position.y=0.44; tTop.castShadow=true; tg.add(tTop);
+    var tEdge=new THREE.Mesh(new THREE.BoxGeometry(1.12,0.02,0.7),BRASS); tEdge.position.y=0.464; tg.add(tEdge);
+    var tPed=new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.075,0.4,10),TEAK); tPed.position.y=0.2; tg.add(tPed);
+    var tFoot=new THREE.Mesh(new THREE.CylinderGeometry(0.25,0.25,0.04,14),TEAK); tFoot.position.y=0.02; tg.add(tFoot);
+    // On table: chart, drinks
+    var chart=new THREE.Mesh(new THREE.PlaneGeometry(0.55,0.36),new THREE.MeshStandardMaterial({color:0xeee0c0,roughness:0.88}));
+    chart.rotation.x=-Math.PI/2; chart.position.set(0,0.47,0); tg.add(chart);
+    var mug=new THREE.Mesh(new THREE.CylinderGeometry(0.04,0.035,0.1,12),CREAM); mug.position.set(0.3,0.49,0.15); tg.add(mug);
+    var mugLiq=new THREE.Mesh(new THREE.CircleGeometry(0.035,12),new THREE.MeshBasicMaterial({color:0x4a2808})); mugLiq.rotation.x=-Math.PI/2; mugLiq.position.set(0.3,0.543,0.15); tg.add(mugLiq);
+    scene.add(tg);
+
+    // ── Nav station ───────────────────────────────────────────────────────
+    var ng=new THREE.Group(); ng.position.set(hw-0.38,-hh,-hd+1.05);
+    var nTop=new THREE.Mesh(new THREE.BoxGeometry(0.68,0.045,1.15),TEAK); nTop.position.set(0,0.78,0); nTop.castShadow=true; ng.add(nTop);
+    var nBack=new THREE.Mesh(new THREE.BoxGeometry(0.68,0.8,0.05),TEAK); nBack.position.set(0,0.4,-0.55); ng.add(nBack);
+    var nSide=new THREE.Mesh(new THREE.BoxGeometry(0.05,0.8,1.1),TEAK); nSide.position.set(-0.315,0.4,0); ng.add(nSide);
+    // Instrument panel
+    var instP=new THREE.Mesh(new THREE.BoxGeometry(0.62,0.42,0.025),new THREE.MeshStandardMaterial({color:0x0c1420,roughness:0.5,metalness:0.35}));
+    instP.position.set(0,0.62,-0.52); ng.add(instP);
+    [[-0.2,0.67],[-0.05,0.67],[0.1,0.67],[-0.12,0.48],[0.06,0.48]].forEach(function(d){
+      var dial=new THREE.Mesh(new THREE.CircleGeometry(0.056,18),new THREE.MeshStandardMaterial({color:0x080e18,roughness:0.25}));
+      dial.position.set(d[0],d[1],-0.505); ng.add(dial);
+      var dRing=new THREE.Mesh(new THREE.RingGeometry(0.056,0.07,18),BRASS); dRing.position.set(d[0],d[1],-0.503); ng.add(dRing);
+      // Needle
+      var needle=new THREE.Mesh(new THREE.PlaneGeometry(0.004,0.04),new THREE.MeshBasicMaterial({color:0xff4020}));
+      needle.position.set(d[0]+0.01,d[1]+0.01,-0.5); ng.add(needle);
+    });
+    // Nav light (red)
+    var navLight=new THREE.PointLight(0xff3010,8,0.8,2); navLight.position.set(0,0.66,-0.49); ng.add(navLight);
+    var navDot=new THREE.Mesh(new THREE.CircleGeometry(0.015,10),new THREE.MeshBasicMaterial({color:0xff4020}));
+    navDot.position.set(0.22,0.66,-0.499); ng.add(navDot);
+    scene.add(ng);
+
+    // Stool
+    var stool=new THREE.Mesh(new THREE.CylinderGeometry(0.15,0.11,0.05,14),NAVY);
+    stool.position.set(hw-0.38,-hh+0.49,-hd+2.0); stool.castShadow=true; scene.add(stool);
+    var stPed=new THREE.Mesh(new THREE.CylinderGeometry(0.022,0.028,0.46,8),BRASS);
+    stPed.position.set(hw-0.38,-hh+0.23,-hd+2.0); scene.add(stPed);
 
     // ── Paintings (maritime) ──────────────────────────────────────────────
-    function addPainting(pos, rotY, style) {
-      var PW=1.9, PH=1.35, FT=0.055, FD=0.07;
-      var g = new THREE.Group();
-      g.position.set(pos[0],pos[1],pos[2]); g.rotation.y=rotY;
-
-      var art = new THREE.Mesh(
-        new THREE.PlaneGeometry(PW,PH),
-        new THREE.MeshStandardMaterial({ map:makeArt(style), roughness:0.88 })
-      );
+    function addPainting(pos,rotY,style){
+      var PW=1.9,PH=1.38,FT=0.06,FD=0.08;
+      var g=new THREE.Group(); g.position.set(pos[0],pos[1],pos[2]); g.rotation.y=rotY;
+      var art=new THREE.Mesh(new THREE.PlaneGeometry(PW,PH),new THREE.MeshStandardMaterial({map:makeArt(style),roughness:0.9}));
       art.position.z=0.02; g.add(art);
-
-      // Frame — dark mahogany with brass liner
-      var fmM = new THREE.MeshStandardMaterial({ color:0x2a1008, roughness:0.65, metalness:0.05 });
-      [[PW+FT*2,FT,FD,0, PH/2+FT/2,0],
-       [PW+FT*2,FT,FD,0,-PH/2-FT/2,0],
-       [FT,PH,FD,-PW/2-FT/2,0,0],
-       [FT,PH,FD, PW/2+FT/2,0,0],
-      ].forEach(function(f) {
-        var m=new THREE.Mesh(new THREE.BoxGeometry(f[0],f[1],f[2]),fmM);
-        m.position.set(f[3],f[4],f[5]); g.add(m);
+      // Outer mahogany frame
+      var FM=new THREE.MeshStandardMaterial({color:0x220e04,roughness:0.6,metalness:0.04});
+      [[PW+FT*2,FT,FD,0,PH/2+FT/2,0],[PW+FT*2,FT,FD,0,-PH/2-FT/2,0],[FT,PH,FD,-PW/2-FT/2,0,0],[FT,PH,FD,PW/2+FT/2,0,0]].forEach(function(f){
+        var m=new THREE.Mesh(new THREE.BoxGeometry(f[0],f[1],f[2]),FM); m.position.set(f[3],f[4],f[5]); g.add(m);
       });
-      // Brass liner
-      var liner=0.035;
-      [[PW+liner*2,liner,FD*.5,0, PH/2-liner/2,0.01],
-       [PW+liner*2,liner,FD*.5,0,-PH/2+liner/2,0.01],
-       [liner,PH,FD*.5,-PW/2+liner/2,0,0.01],
-       [liner,PH,FD*.5, PW/2-liner/2,0,0.01],
-      ].forEach(function(f) {
-        var m=new THREE.Mesh(new THREE.BoxGeometry(f[0],f[1],f[2]),brassMat);
-        m.position.set(f[3],f[4],f[5]); g.add(m);
+      // Gold liner
+      var GL=0.032;
+      [[PW+GL*2,GL,FD*.5,0,PH/2-GL/2,0.01],[PW+GL*2,GL,FD*.5,0,-PH/2+GL/2,0.01],[GL,PH,FD*.5,-PW/2+GL/2,0,0.01],[GL,PH,FD*.5,PW/2-GL/2,0,0.01]].forEach(function(f){
+        var m=new THREE.Mesh(new THREE.BoxGeometry(f[0],f[1],f[2]),BRASS); m.position.set(f[3],f[4],f[5]); g.add(m);
       });
-
-      // Picture light
-      var lb=new THREE.Mesh(new THREE.BoxGeometry(0.7,0.05,0.09),brassMat);
-      lb.position.set(0,PH/2+FT+0.1,0.04); g.add(lb);
-      var spot=new THREE.SpotLight(0xfff0a0,2.5,4,Math.PI/7,0.4,1.5);
-      spot.position.set(0,PH/2+FT+0.18,0.25);
-      spot.target.position.set(0,-PH*.15,0.8);
-      spot.castShadow=true; g.add(spot); g.add(spot.target);
-
+      // Brass picture rail
+      var lb=new THREE.Mesh(new THREE.BoxGeometry(0.75,0.055,0.1),BRASS);
+      lb.position.set(0,PH/2+FT+0.1,0.045); g.add(lb);
+      // Picture spotlight
+      var spot=new THREE.SpotLight(0xffe8a0,3.8,5.5,Math.PI/6.5,0.32,1.8);
+      spot.position.set(0,PH/2+FT+0.2,0.28);
+      spot.target.position.set(0,-PH*.12,0.9);
+      spot.castShadow=true;
+      g.add(spot); g.add(spot.target);
       scene.add(g);
     }
 
-    addPainting([0, 0.35, -hd+0.04],  0,           0);  // stern — tall ship
-    addPainting([0, 0.35,  hd-0.04],  Math.PI,     3);  // bow — harbour sunset
-    addPainting([-hw+0.04, 0.35, 1.5], Math.PI/2,  2);  // port — stormy sea
-    addPainting([ hw-0.04, 0.4, -2.8],-Math.PI/2,  1);  // starboard — nautical chart
+    addPainting([0,   0.38,-hd+0.03],  0,         0);  // tall ship
+    addPainting([0,   0.38, hd-0.03],  Math.PI,   3);  // harbour sunset
+    addPainting([-hw+0.03,0.38, 1.6],  Math.PI/2, 2);  // storm
+    addPainting([ hw-0.03,0.42,-2.8], -Math.PI/2, 1);  // chart
 
     // ── Resize ────────────────────────────────────────────────────────────
-    window.addEventListener('resize', function() {
-      camera.aspect = innerWidth/innerHeight;
+    window.addEventListener('resize',function(){
+      camera.aspect=innerWidth/innerHeight;
       camera.updateProjectionMatrix();
-      renderer.setSize(innerWidth, innerHeight);
+      renderer.setSize(innerWidth,innerHeight);
+      composer.setSize(innerWidth,innerHeight);
+      bloom.resolution.set(innerWidth,innerHeight);
     });
 
     // ── Loop ──────────────────────────────────────────────────────────────
-    var clk = new THREE.Clock();
-    (function animate() {
+    var clk=new THREE.Clock();
+    (function animate(){
       requestAnimationFrame(animate);
-      var t = clk.getElapsedTime();
-      // Gentle ocean light shimmer through portholes
-      sun1.intensity = 3.0 + Math.sin(t*0.8)*0.3 + Math.sin(t*1.7)*0.15;
-      sun2.intensity = 1.5 + Math.sin(t*0.9+1)*0.2;
-      // Subtle boat rock (very gentle camera sway)
-      camera.position.y += Math.sin(t*0.4)*0.0003;
+      var t=clk.getElapsedTime();
+      // Update FX shader time (for grain animation)
+      fxPass.uniforms.uTime.value=t;
+      // Porthole shimmer (ocean caustic flicker)
+      portLights.forEach(function(pl,i){
+        pl.intensity=(i<2?4.5:2.5)+Math.sin(t*(0.7+i*0.3))*0.4+Math.sin(t*(1.9+i*0.2))*0.2;
+      });
+      // Very gentle boat sway
+      var sway=Math.sin(t*0.35)*0.0004+Math.sin(t*0.22)*0.0003;
+      camera.position.y+=sway;
+      camera.position.x+=Math.cos(t*0.28)*0.00015;
       controls.update();
-      renderer.render(scene, camera);
+      composer.render();
     })();
 
   })();
