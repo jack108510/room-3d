@@ -13,8 +13,8 @@
       bottom: 24px;
       left: 50%;
       transform: translateX(-50%);
-      color: rgba(255,255,255,0.45);
-      font-family: 'Georgia', serif;
+      color: rgba(255,255,255,0.4);
+      font-family: Georgia, serif;
       font-size: 13px;
       letter-spacing: 0.05em;
       pointer-events: none;
@@ -24,507 +24,373 @@
 <body>
   <div id="hint">Click + drag to look around &nbsp;·&nbsp; Scroll to zoom</div>
 
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
-    }
-  }
-  </script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 
-  <script type="module">
-    import * as THREE from 'three';
-    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-
-    // ── Scene ──────────────────────────────────────────────────────────────
-    const scene = new THREE.Scene();
+  <script>
+    var scene = new THREE.Scene();
     scene.background = new THREE.Color(0x111111);
-    scene.fog = new THREE.Fog(0x111111, 10, 25);
 
-    const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 60);
+    var camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 60);
     camera.position.set(0, 0.2, 0.5);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    var renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(innerWidth, innerHeight);
     renderer.setPixelRatio(devicePixelRatio);
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.9;
     document.body.appendChild(renderer.domElement);
 
-    const controls = new OrbitControls(camera, renderer.domElement);
+    var controls = new THREE.OrbitControls(camera, renderer.domElement);
     controls.enablePan = false;
     controls.minDistance = 0.1;
     controls.maxDistance = 5;
     controls.target.set(0, 0.2, 0);
     controls.update();
 
-    // ── Room dimensions ────────────────────────────────────────────────────
-    const RW = 10, RH = 4, RD = 10;
-    const HALF_W = RW / 2, HALF_H = RH / 2, HALF_D = RD / 2;
+    var RW = 10, RH = 4, RD = 10;
+    var HW = 5, HH = 2, HD = 5;
 
-    // ── Lighting ───────────────────────────────────────────────────────────
-    scene.add(new THREE.AmbientLight(0xfff3e0, 0.35));
+    // Lighting
+    scene.add(new THREE.AmbientLight(0xfff3e0, 0.5));
 
-    // Central pendant
-    const pendant = new THREE.PointLight(0xfff5e0, 2.5, 18);
-    pendant.position.set(0, HALF_H - 0.35, 0);
+    var pendant = new THREE.PointLight(0xfff5e0, 3, 20);
+    pendant.position.set(0, HH - 0.35, 0);
     pendant.castShadow = true;
-    pendant.shadow.mapSize.set(1024, 1024);
     scene.add(pendant);
 
-    // Warm corner fills
-    [[−3, −1, −3], [3, −1, 3], [−3, −1, 3], [3, −1, −3]].forEach(([x, y, z]) => {
-      const l = new THREE.PointLight(0xffe4c0, 0.3, 8);
-      l.position.set(x, y, z);
+    // Bulb
+    var bulb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.12, 16, 8),
+      new THREE.MeshBasicMaterial({ color: 0xfffde0 })
+    );
+    bulb.position.copy(pendant.position);
+    scene.add(bulb);
+
+    // Cord
+    var cord = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.01, 0.01, 0.5),
+      new THREE.MeshLambertMaterial({ color: 0x222222 })
+    );
+    cord.position.set(0, HH - 0.05, 0);
+    scene.add(cord);
+
+    // Fill lights
+    [[-3,-1,-3],[3,-1,3],[-3,-1,3],[3,-1,-3]].forEach(function(p) {
+      var l = new THREE.PointLight(0xffe4c0, 0.4, 8);
+      l.position.set(p[0], p[1], p[2]);
       scene.add(l);
     });
 
-    // Pendant bulb geometry
-    const bulbMesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.12, 16, 8),
-      new THREE.MeshBasicMaterial({ color: 0xfff9e0 })
-    );
-    bulbMesh.position.copy(pendant.position);
-    scene.add(bulbMesh);
+    // ── Textures ──────────────────────────────────────────────────────────
 
-    // Cord
-    const cordGeo = new THREE.CylinderGeometry(0.01, 0.01, 0.6);
-    const cordMesh = new THREE.Mesh(cordGeo, new THREE.MeshLambertMaterial({ color: 0x222222 }));
-    cordMesh.position.set(0, HALF_H - 0.05, 0);
-    scene.add(cordMesh);
-
-    // ── Texture helpers ────────────────────────────────────────────────────
-
-    function makeWallTexture(hexColor) {
-      const c = document.createElement('canvas');
+    function wallTex(color) {
+      var c = document.createElement('canvas');
       c.width = c.height = 512;
-      const ctx = c.getContext('2d');
-      ctx.fillStyle = hexColor;
-      ctx.fillRect(0, 0, 512, 512);
-      // subtle noise
-      for (let i = 0; i < 6000; i++) {
-        const a = Math.random() * 0.04;
-        ctx.fillStyle = Math.random() > 0.5 ? `rgba(255,255,255,${a})` : `rgba(0,0,0,${a})`;
-        ctx.fillRect(Math.random() * 512, Math.random() * 512, 2, 2);
+      var x = c.getContext('2d');
+      x.fillStyle = color;
+      x.fillRect(0, 0, 512, 512);
+      for (var i = 0; i < 5000; i++) {
+        var a = Math.random() * 0.035;
+        x.fillStyle = Math.random() > 0.5 ? 'rgba(255,255,255,' + a + ')' : 'rgba(0,0,0,' + a + ')';
+        x.fillRect(Math.random() * 512, Math.random() * 512, 2, 2);
       }
-      const t = new THREE.CanvasTexture(c);
+      var t = new THREE.CanvasTexture(c);
       t.wrapS = t.wrapT = THREE.RepeatWrapping;
       t.repeat.set(3, 1.5);
       return t;
     }
 
-    function makeFloorTexture() {
-      const c = document.createElement('canvas');
+    function floorTex() {
+      var c = document.createElement('canvas');
       c.width = c.height = 512;
-      const ctx = c.getContext('2d');
-      const PLANK_W = 512 / 4;
-      for (let col = 0; col < 4; col++) {
-        for (let row = 0; row < 6; row++) {
-          const x = col * PLANK_W;
-          const y = row * 86;
-          const hue = 28 + Math.random() * 10;
-          const lit = 30 + Math.random() * 12;
-          const g = ctx.createLinearGradient(x, y, x + PLANK_W, y + 86);
-          g.addColorStop(0, `hsl(${hue},48%,${lit}%)`);
-          g.addColorStop(0.4, `hsl(${hue+3},42%,${lit+6}%)`);
-          g.addColorStop(1, `hsl(${hue},46%,${lit+2}%)`);
-          ctx.fillStyle = g;
-          ctx.fillRect(x + 1, y + 1, PLANK_W - 2, 84);
-          ctx.strokeStyle = 'rgba(0,0,0,0.25)';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(x + 1, y + 1, PLANK_W - 2, 84);
-          // grain lines
-          ctx.strokeStyle = `rgba(0,0,0,0.06)`;
-          ctx.lineWidth = 1;
-          for (let g2 = 0; g2 < 5; g2++) {
-            const gx = x + Math.random() * PLANK_W;
-            ctx.beginPath();
-            ctx.moveTo(gx, y);
-            ctx.lineTo(gx + (Math.random() - 0.5) * 20, y + 86);
-            ctx.stroke();
-          }
+      var x = c.getContext('2d');
+      var PW = 128;
+      for (var col = 0; col < 4; col++) {
+        for (var row = 0; row < 6; row++) {
+          var px = col * PW, py = row * 86;
+          var hue = 28 + Math.random() * 10, lit = 30 + Math.random() * 12;
+          var g = x.createLinearGradient(px, py, px + PW, py + 86);
+          g.addColorStop(0, 'hsl(' + hue + ',48%,' + lit + '%)');
+          g.addColorStop(0.4, 'hsl(' + (hue+3) + ',42%,' + (lit+6) + '%)');
+          g.addColorStop(1, 'hsl(' + hue + ',46%,' + (lit+2) + '%)');
+          x.fillStyle = g;
+          x.fillRect(px + 1, py + 1, PW - 2, 84);
+          x.strokeStyle = 'rgba(0,0,0,0.22)';
+          x.lineWidth = 2;
+          x.strokeRect(px + 1, py + 1, PW - 2, 84);
         }
       }
-      const t = new THREE.CanvasTexture(c);
+      var t = new THREE.CanvasTexture(c);
       t.wrapS = t.wrapT = THREE.RepeatWrapping;
       t.repeat.set(3, 3);
       return t;
     }
 
-    function makePopcornTexture() {
-      const c = document.createElement('canvas');
+    function popcornTex() {
+      var c = document.createElement('canvas');
       c.width = c.height = 1024;
-      const ctx = c.getContext('2d');
-      ctx.fillStyle = '#f2ede7';
-      ctx.fillRect(0, 0, 1024, 1024);
-      for (let i = 0; i < 4500; i++) {
-        const x = Math.random() * 1024;
-        const y = Math.random() * 1024;
-        const rx = 3 + Math.random() * 7;
-        const ry = 2 + Math.random() * 5;
-        const angle = Math.random() * Math.PI;
-        const bright = 220 + Math.floor(Math.random() * 35);
-        const shadow = 140 + Math.floor(Math.random() * 50);
-        const g = ctx.createRadialGradient(x - rx * 0.3, y - ry * 0.4, 0, x, y, Math.max(rx, ry));
-        g.addColorStop(0, `rgb(${bright},${bright},${bright - 5})`);
-        g.addColorStop(0.5, `rgb(${shadow + 30},${shadow + 25},${shadow + 20})`);
-        g.addColorStop(1, `rgb(${shadow - 15},${shadow - 20},${shadow - 22})`);
-        ctx.beginPath();
-        ctx.ellipse(x, y, rx, ry, angle, 0, Math.PI * 2);
-        ctx.fillStyle = g;
-        ctx.fill();
+      var x = c.getContext('2d');
+      x.fillStyle = '#f0ece6';
+      x.fillRect(0, 0, 1024, 1024);
+      for (var i = 0; i < 4000; i++) {
+        var bx = Math.random() * 1024, by = Math.random() * 1024;
+        var rx = 3 + Math.random() * 7, ry = 2 + Math.random() * 5;
+        var angle = Math.random() * Math.PI;
+        var br = 210 + Math.floor(Math.random() * 45);
+        var dk = 145 + Math.floor(Math.random() * 50);
+        var g = x.createRadialGradient(bx - rx*0.3, by - ry*0.4, 0, bx, by, Math.max(rx,ry));
+        g.addColorStop(0, 'rgb(' + br + ',' + br + ',' + (br-5) + ')');
+        g.addColorStop(0.5, 'rgb(' + (dk+30) + ',' + (dk+25) + ',' + (dk+20) + ')');
+        g.addColorStop(1, 'rgb(' + (dk-15) + ',' + (dk-20) + ',' + (dk-22) + ')');
+        x.beginPath();
+        x.ellipse(bx, by, rx, ry, angle, 0, Math.PI * 2);
+        x.fillStyle = g;
+        x.fill();
       }
-      const t = new THREE.CanvasTexture(c);
+      var t = new THREE.CanvasTexture(c);
       t.wrapS = t.wrapT = THREE.RepeatWrapping;
       t.repeat.set(5, 5);
       return t;
     }
 
-    // ── Painting art ───────────────────────────────────────────────────────
+    // ── Art ───────────────────────────────────────────────────────────────
 
-    function makePaintingCanvas(style) {
-      const c = document.createElement('canvas');
+    function makeArt(style) {
+      var c = document.createElement('canvas');
       c.width = 512; c.height = 384;
-      const ctx = c.getContext('2d');
+      var x = c.getContext('2d');
 
       if (style === 0) {
-        // Sunset over water
-        const sky = ctx.createLinearGradient(0, 0, 0, 220);
+        // Sunset
+        var sky = x.createLinearGradient(0, 0, 0, 220);
         sky.addColorStop(0, '#1a2f5a');
         sky.addColorStop(0.5, '#c45a20');
         sky.addColorStop(1, '#e8a030');
-        ctx.fillStyle = sky;
-        ctx.fillRect(0, 0, 512, 220);
-        // Water
-        const water = ctx.createLinearGradient(0, 220, 0, 384);
-        water.addColorStop(0, '#1a3060');
-        water.addColorStop(1, '#0a1830');
-        ctx.fillStyle = water;
-        ctx.fillRect(0, 220, 512, 164);
-        // Sun
-        ctx.beginPath();
-        ctx.arc(256, 215, 38, 0, Math.PI * 2);
-        ctx.fillStyle = '#f5c842';
-        ctx.fill();
-        // Sun reflection
-        ctx.fillStyle = 'rgba(245,200,66,0.35)';
-        ctx.fillRect(226, 220, 60, 80);
-        ctx.fillStyle = 'rgba(245,200,66,0.15)';
-        ctx.fillRect(206, 300, 100, 40);
-        // Horizon glow
-        ctx.fillStyle = 'rgba(255,120,30,0.2)';
-        ctx.fillRect(0, 205, 512, 30);
-        // Waves
-        ctx.strokeStyle = 'rgba(100,160,220,0.4)';
-        ctx.lineWidth = 1.5;
-        for (let wy = 240; wy < 380; wy += 12) {
-          ctx.beginPath();
-          for (let wx = 0; wx < 512; wx += 40) {
-            ctx.moveTo(wx, wy);
-            ctx.quadraticCurveTo(wx + 10, wy - 3, wx + 20, wy);
-            ctx.quadraticCurveTo(wx + 30, wy + 3, wx + 40, wy);
+        x.fillStyle = sky; x.fillRect(0, 0, 512, 220);
+        var sea = x.createLinearGradient(0, 220, 0, 384);
+        sea.addColorStop(0, '#1a3060'); sea.addColorStop(1, '#0a1830');
+        x.fillStyle = sea; x.fillRect(0, 220, 512, 164);
+        x.beginPath(); x.arc(256, 218, 38, 0, Math.PI*2);
+        x.fillStyle = '#f5c842'; x.fill();
+        x.fillStyle = 'rgba(245,200,66,0.3)'; x.fillRect(226,220,60,100);
+        x.fillStyle = '#0d1e38';
+        x.beginPath();
+        x.moveTo(0,220); x.lineTo(60,160); x.lineTo(130,200);
+        x.lineTo(200,140); x.lineTo(280,195); x.lineTo(360,150);
+        x.lineTo(440,185); x.lineTo(512,165); x.lineTo(512,220);
+        x.closePath(); x.fill();
+        x.strokeStyle = 'rgba(100,160,220,0.35)'; x.lineWidth = 1.5;
+        for (var wy = 245; wy < 380; wy += 14) {
+          x.beginPath();
+          for (var wx = 0; wx < 512; wx += 40) {
+            x.moveTo(wx, wy); x.quadraticCurveTo(wx+10,wy-3,wx+20,wy); x.quadraticCurveTo(wx+30,wy+3,wx+40,wy);
           }
-          ctx.stroke();
+          x.stroke();
         }
-        // Silhouette mountains
-        ctx.fillStyle = '#0d1e38';
-        ctx.beginPath();
-        ctx.moveTo(0, 220);
-        ctx.lineTo(60, 160); ctx.lineTo(130, 200);
-        ctx.lineTo(200, 140); ctx.lineTo(280, 195);
-        ctx.lineTo(360, 150); ctx.lineTo(440, 185);
-        ctx.lineTo(512, 165); ctx.lineTo(512, 220);
-        ctx.closePath();
-        ctx.fill();
 
       } else if (style === 1) {
-        // Abstract geometric — Mondrian-ish
-        const blocks = [
-          { x: 0,   y: 0,   w: 200, h: 150, c: '#c8102e' },
-          { x: 210, y: 0,   w: 150, h: 100, c: '#ffd700' },
-          { x: 370, y: 0,   w: 142, h: 200, c: '#1a3a7c' },
-          { x: 0,   y: 160, w: 100, h: 224, c: '#1a3a7c' },
-          { x: 110, y: 110, w: 250, h: 140, c: '#f0ede5' },
-          { x: 110, y: 260, w: 120, h: 124, c: '#c8102e' },
-          { x: 240, y: 260, w: 120, h: 124, c: '#ffd700' },
-          { x: 370, y: 210, w: 142, h: 174, c: '#f0ede5' },
+        // Mondrian
+        x.fillStyle = '#f5f0e8'; x.fillRect(0,0,512,384);
+        var blocks = [
+          {x:0,y:0,w:200,h:150,c:'#c8102e'},{x:210,y:0,w:150,h:100,c:'#ffd700'},
+          {x:370,y:0,w:142,h:200,c:'#1a3a7c'},{x:0,y:160,w:100,h:224,c:'#1a3a7c'},
+          {x:110,y:110,w:250,h:140,c:'#f5f0e8'},{x:110,y:260,w:120,h:124,c:'#c8102e'},
+          {x:240,y:260,w:120,h:124,c:'#ffd700'},{x:370,y:210,w:142,h:174,c:'#f5f0e8'}
         ];
-        ctx.fillStyle = '#f0ede5';
-        ctx.fillRect(0, 0, 512, 384);
-        blocks.forEach(b => {
-          ctx.fillStyle = b.c;
-          ctx.fillRect(b.x, b.y, b.w, b.h);
-        });
-        ctx.strokeStyle = '#111';
-        ctx.lineWidth = 6;
-        [0, 200, 210, 370, 512].forEach(x => { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 384); ctx.stroke(); });
-        [0, 100, 150, 200, 260, 384].forEach(y => { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(512, y); ctx.stroke(); });
+        blocks.forEach(function(b) { x.fillStyle=b.c; x.fillRect(b.x,b.y,b.w,b.h); });
+        x.strokeStyle='#111'; x.lineWidth=6;
+        [0,200,210,370,512].forEach(function(lx){x.beginPath();x.moveTo(lx,0);x.lineTo(lx,384);x.stroke();});
+        [0,100,150,200,260,384].forEach(function(ly){x.beginPath();x.moveTo(0,ly);x.lineTo(512,ly);x.stroke();});
 
       } else if (style === 2) {
         // Impressionist garden
-        const bg = ctx.createLinearGradient(0, 0, 0, 384);
-        bg.addColorStop(0, '#87b8d4');
-        bg.addColorStop(0.5, '#a8cce0');
-        bg.addColorStop(1, '#3a7a30');
-        ctx.fillStyle = bg;
-        ctx.fillRect(0, 0, 512, 384);
-        // Ground
-        ctx.fillStyle = '#3a7a30';
-        ctx.fillRect(0, 240, 512, 144);
-        // Flowers — impressionist dabs
-        const cols = ['#e83060', '#f0c030', '#e05080', '#80c040', '#c040e0', '#f08030', '#40b8e0'];
-        for (let i = 0; i < 300; i++) {
-          const fx = Math.random() * 512;
-          const fy = 220 + Math.random() * 160;
-          const r = 3 + Math.random() * 8;
-          ctx.beginPath();
-          ctx.arc(fx, fy, r, 0, Math.PI * 2);
-          ctx.fillStyle = cols[Math.floor(Math.random() * cols.length)];
-          ctx.globalAlpha = 0.7 + Math.random() * 0.3;
-          ctx.fill();
+        var bg = x.createLinearGradient(0,0,0,384);
+        bg.addColorStop(0,'#87b8d4'); bg.addColorStop(0.55,'#a8cce0'); bg.addColorStop(1,'#3a7a30');
+        x.fillStyle=bg; x.fillRect(0,0,512,384);
+        x.fillStyle='#3a7a30'; x.fillRect(0,240,512,144);
+        var fc=['#e83060','#f0c030','#e05080','#80c040','#c040e0','#f08030','#40b8e0'];
+        for (var fi=0;fi<300;fi++){
+          x.beginPath();
+          x.arc(Math.random()*512, 220+Math.random()*160, 3+Math.random()*8, 0, Math.PI*2);
+          x.fillStyle=fc[Math.floor(Math.random()*fc.length)];
+          x.globalAlpha=0.7+Math.random()*0.3; x.fill();
         }
-        ctx.globalAlpha = 1;
-        // Trees
-        for (let t = 0; t < 4; t++) {
-          const tx = 60 + t * 130 + (Math.random() - 0.5) * 30;
-          ctx.fillStyle = '#4a3020';
-          ctx.fillRect(tx - 6, 140, 12, 110);
-          // Foliage dabs
-          for (let d = 0; d < 80; d++) {
-            const dx = tx + (Math.random() - 0.5) * 60;
-            const dy = 80 + Math.random() * 80;
-            ctx.beginPath();
-            ctx.arc(dx, dy, 5 + Math.random() * 14, 0, Math.PI * 2);
-            const green = `hsl(${105 + Math.random() * 30}, ${50 + Math.random() * 30}%, ${25 + Math.random() * 20}%)`;
-            ctx.fillStyle = green;
-            ctx.globalAlpha = 0.6 + Math.random() * 0.4;
-            ctx.fill();
+        x.globalAlpha=1;
+        for (var ti=0;ti<4;ti++){
+          var tx=60+ti*130+(Math.random()-0.5)*20;
+          x.fillStyle='#4a3020'; x.fillRect(tx-6,140,12,110);
+          for(var di=0;di<70;di++){
+            x.beginPath();
+            x.arc(tx+(Math.random()-0.5)*60, 80+Math.random()*80, 5+Math.random()*14, 0, Math.PI*2);
+            x.fillStyle='hsl('+(110+Math.random()*25)+','+(50+Math.random()*25)+'%,'+(25+Math.random()*18)+'%)';
+            x.globalAlpha=0.65+Math.random()*0.35; x.fill();
           }
-          ctx.globalAlpha = 1;
+          x.globalAlpha=1;
         }
-        // Path
-        ctx.fillStyle = 'rgba(200,180,130,0.5)';
-        ctx.beginPath();
-        ctx.moveTo(220, 384); ctx.lineTo(270, 384); ctx.lineTo(290, 240); ctx.lineTo(240, 240);
-        ctx.closePath();
-        ctx.fill();
+        x.fillStyle='rgba(200,180,130,0.45)';
+        x.beginPath(); x.moveTo(220,384); x.lineTo(270,384); x.lineTo(290,240); x.lineTo(240,240); x.closePath(); x.fill();
 
       } else {
-        // Still life — vase with flowers
-        ctx.fillStyle = '#2a1e0e';
-        ctx.fillRect(0, 0, 512, 384);
-        // Background gradient
-        const bg = ctx.createRadialGradient(256, 180, 10, 256, 180, 280);
-        bg.addColorStop(0, '#4a3820');
-        bg.addColorStop(1, '#1a1008');
-        ctx.fillStyle = bg;
-        ctx.fillRect(0, 0, 512, 384);
-        // Table surface
-        const table = ctx.createLinearGradient(0, 290, 0, 384);
-        table.addColorStop(0, '#5a3c18');
-        table.addColorStop(1, '#3a2010');
-        ctx.fillStyle = table;
-        ctx.fillRect(0, 295, 512, 89);
-        ctx.fillStyle = 'rgba(0,0,0,0.4)';
-        ctx.fillRect(0, 293, 512, 6);
-        // Vase
-        ctx.fillStyle = '#2244aa';
-        ctx.beginPath();
-        ctx.ellipse(256, 310, 38, 16, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillRect(218, 220, 76, 95);
-        ctx.beginPath();
-        ctx.ellipse(256, 220, 38, 16, 0, 0, Math.PI * 2);
-        ctx.fill();
-        // Vase highlight
-        ctx.fillStyle = 'rgba(100,150,255,0.3)';
-        ctx.beginPath();
-        ctx.ellipse(240, 255, 10, 45, -0.3, 0, Math.PI * 2);
-        ctx.fill();
-        // Stems
-        const stemCols = ['#2a6020', '#1e5018', '#366828'];
-        for (let s = 0; s < 8; s++) {
-          const sx = 200 + s * 16 + (Math.random() - 0.5) * 12;
-          ctx.strokeStyle = stemCols[s % 3];
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(256, 218);
-          ctx.bezierCurveTo(256 + (Math.random()-0.5)*30, 160, sx + (Math.random()-0.5)*20, 100, sx, 50 + Math.random() * 60);
-          ctx.stroke();
+        // Still life flowers
+        x.fillStyle='#2a1e0e'; x.fillRect(0,0,512,384);
+        var bg2=x.createRadialGradient(256,180,10,256,180,280);
+        bg2.addColorStop(0,'#4a3820'); bg2.addColorStop(1,'#1a1008');
+        x.fillStyle=bg2; x.fillRect(0,0,512,384);
+        var tbl=x.createLinearGradient(0,290,0,384);
+        tbl.addColorStop(0,'#5a3c18'); tbl.addColorStop(1,'#3a2010');
+        x.fillStyle=tbl; x.fillRect(0,295,512,89);
+        x.fillStyle='#2244aa';
+        x.beginPath(); x.ellipse(256,310,38,16,0,0,Math.PI*2); x.fill();
+        x.fillRect(218,220,76,95);
+        x.beginPath(); x.ellipse(256,220,38,16,0,0,Math.PI*2); x.fill();
+        x.fillStyle='rgba(100,150,255,0.25)';
+        x.beginPath(); x.ellipse(240,255,10,45,-0.3,0,Math.PI*2); x.fill();
+        var sc=['#2a6020','#1e5018','#366828'];
+        for(var si=0;si<8;si++){
+          var sx2=200+si*16+(Math.random()-0.5)*12;
+          x.strokeStyle=sc[si%3]; x.lineWidth=2; x.beginPath();
+          x.moveTo(256,218);
+          x.bezierCurveTo(256+(Math.random()-0.5)*30,160,sx2+(Math.random()-0.5)*20,100,sx2,50+Math.random()*60);
+          x.stroke();
         }
-        // Flowers
-        const fData = [
-          [185, 80, '#e83060'], [210, 55, '#f5c030'], [240, 40, '#e040a0'],
-          [265, 48, '#ff6030'], [295, 62, '#c050e0'], [318, 75, '#f5c030'],
-          [230, 95, '#e83060'], [270, 90, '#40b8e0'],
-        ];
-        fData.forEach(([fx, fy, col]) => {
-          for (let p = 0; p < 7; p++) {
-            const angle = (p / 7) * Math.PI * 2;
-            const pr = 12 + Math.random() * 4;
-            ctx.beginPath();
-            ctx.ellipse(fx + Math.cos(angle) * pr, fy + Math.sin(angle) * pr, 9, 6, angle, 0, Math.PI * 2);
-            ctx.fillStyle = col;
-            ctx.globalAlpha = 0.85;
-            ctx.fill();
+        var fd=[[185,80,'#e83060'],[210,55,'#f5c030'],[240,40,'#e040a0'],
+                 [265,48,'#ff6030'],[295,62,'#c050e0'],[318,75,'#f5c030'],
+                 [230,95,'#e83060'],[270,90,'#40b8e0']];
+        fd.forEach(function(f){
+          for(var pi=0;pi<7;pi++){
+            var ang=(pi/7)*Math.PI*2, pr=12+Math.random()*4;
+            x.beginPath(); x.ellipse(f[0]+Math.cos(ang)*pr,f[1]+Math.sin(ang)*pr,9,6,ang,0,Math.PI*2);
+            x.fillStyle=f[2]; x.globalAlpha=0.85; x.fill();
           }
-          ctx.globalAlpha = 1;
-          ctx.beginPath();
-          ctx.arc(fx, fy, 7, 0, Math.PI * 2);
-          ctx.fillStyle = '#f5e050';
-          ctx.fill();
+          x.globalAlpha=1;
+          x.beginPath(); x.arc(f[0],f[1],7,0,Math.PI*2);
+          x.fillStyle='#f5e050'; x.fill();
         });
-        // Leaves
-        ctx.fillStyle = '#2a7030';
-        ctx.globalAlpha = 0.7;
-        [[195, 130], [280, 115], [220, 150]].forEach(([lx, ly]) => {
-          ctx.beginPath();
-          ctx.ellipse(lx, ly, 20, 8, Math.random() * Math.PI, 0, Math.PI * 2);
-          ctx.fill();
-        });
-        ctx.globalAlpha = 1;
       }
-
       return new THREE.CanvasTexture(c);
     }
 
-    // ── Build room ─────────────────────────────────────────────────────────
+    // ── Room ──────────────────────────────────────────────────────────────
 
-    const wallColor = '#ddd5c2';
+    var wc = '#ddd5c2';
 
     // Floor
-    const floorMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(RW, RD, 1, 1),
-      new THREE.MeshLambertMaterial({ map: makeFloorTexture() })
+    var floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(RW, RD),
+      new THREE.MeshLambertMaterial({ map: floorTex() })
     );
-    floorMesh.rotation.x = -Math.PI / 2;
-    floorMesh.position.y = -HALF_H;
-    floorMesh.receiveShadow = true;
-    scene.add(floorMesh);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -HH;
+    floor.receiveShadow = true;
+    scene.add(floor);
 
     // Ceiling
-    const ceilMesh = new THREE.Mesh(
+    var ceil = new THREE.Mesh(
       new THREE.PlaneGeometry(RW, RD),
-      new THREE.MeshLambertMaterial({ map: makePopcornTexture() })
+      new THREE.MeshLambertMaterial({ map: popcornTex() })
     );
-    ceilMesh.rotation.x = Math.PI / 2;
-    ceilMesh.position.y = HALF_H;
-    scene.add(ceilMesh);
+    ceil.rotation.x = Math.PI / 2;
+    ceil.position.y = HH;
+    scene.add(ceil);
 
-    // Walls — built individually so normals face inward
-    function addWall(w, h, pos, rotY, texColor) {
-      const m = new THREE.Mesh(
+    // Walls
+    function addWall(w, h, pos, rotY, color) {
+      var m = new THREE.Mesh(
         new THREE.PlaneGeometry(w, h),
-        new THREE.MeshLambertMaterial({ map: makeWallTexture(texColor) })
+        new THREE.MeshLambertMaterial({ map: wallTex(color) })
       );
-      m.position.set(...pos);
+      m.position.set(pos[0], pos[1], pos[2]);
       m.rotation.y = rotY;
       m.receiveShadow = true;
       scene.add(m);
     }
-    addWall(RW, RH, [0, 0, -HALF_D], 0,           wallColor);        // back
-    addWall(RW, RH, [0, 0,  HALF_D], Math.PI,     wallColor);        // front
-    addWall(RD, RH, [-HALF_W, 0, 0],  Math.PI/2,  '#d4cbb8');        // left
-    addWall(RD, RH, [ HALF_W, 0, 0], -Math.PI/2,  '#d4cbb8');        // right
+    addWall(RW, RH, [0, 0, -HD],  0,            wc);
+    addWall(RW, RH, [0, 0,  HD],  Math.PI,      wc);
+    addWall(RD, RH, [-HW, 0, 0],  Math.PI/2,    '#d4cbb8');
+    addWall(RD, RH, [ HW, 0, 0], -Math.PI/2,    '#d4cbb8');
 
     // Baseboard
-    const baseMat = new THREE.MeshLambertMaterial({ color: 0xf5f0e8 });
+    var baseMat = new THREE.MeshLambertMaterial({ color: 0xf5f0e8 });
     [
-      { size: [RW, 0.14, 0.04], pos: [0, -HALF_H + 0.07, -HALF_D + 0.02] },
-      { size: [RW, 0.14, 0.04], pos: [0, -HALF_H + 0.07,  HALF_D - 0.02], rotY: Math.PI },
-      { size: [RD, 0.14, 0.04], pos: [-HALF_W + 0.02, -HALF_H + 0.07, 0], rotY:  Math.PI/2 },
-      { size: [RD, 0.14, 0.04], pos: [ HALF_W - 0.02, -HALF_H + 0.07, 0], rotY: -Math.PI/2 },
-    ].forEach(({ size, pos, rotY = 0 }) => {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(...size), baseMat);
-      mesh.position.set(...pos);
-      mesh.rotation.y = rotY;
-      scene.add(mesh);
+      { s:[RW,0.13,0.04], p:[0,-HH+0.065,-HD+0.02], r:0 },
+      { s:[RW,0.13,0.04], p:[0,-HH+0.065, HD-0.02], r:Math.PI },
+      { s:[RD,0.13,0.04], p:[-HW+0.02,-HH+0.065,0], r:Math.PI/2 },
+      { s:[RD,0.13,0.04], p:[ HW-0.02,-HH+0.065,0], r:-Math.PI/2 },
+    ].forEach(function(b) {
+      var m = new THREE.Mesh(new THREE.BoxGeometry(b.s[0],b.s[1],b.s[2]), baseMat);
+      m.position.set(b.p[0],b.p[1],b.p[2]); m.rotation.y = b.r; scene.add(m);
     });
 
     // Crown molding
-    const crownMat = new THREE.MeshLambertMaterial({ color: 0xf8f4ee });
+    var crownMat = new THREE.MeshLambertMaterial({ color: 0xf8f4ee });
     [
-      { size: [RW, 0.10, 0.04], pos: [0,  HALF_H - 0.05, -HALF_D + 0.02] },
-      { size: [RW, 0.10, 0.04], pos: [0,  HALF_H - 0.05,  HALF_D - 0.02], rotY: Math.PI },
-      { size: [RD, 0.10, 0.04], pos: [-HALF_W + 0.02, HALF_H - 0.05, 0], rotY:  Math.PI/2 },
-      { size: [RD, 0.10, 0.04], pos: [ HALF_W - 0.02, HALF_H - 0.05, 0], rotY: -Math.PI/2 },
-    ].forEach(({ size, pos, rotY = 0 }) => {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(...size), crownMat);
-      mesh.position.set(...pos);
-      mesh.rotation.y = rotY;
-      scene.add(mesh);
+      { s:[RW,0.09,0.04], p:[0, HH-0.045,-HD+0.02], r:0 },
+      { s:[RW,0.09,0.04], p:[0, HH-0.045, HD-0.02], r:Math.PI },
+      { s:[RD,0.09,0.04], p:[-HW+0.02,HH-0.045,0],  r:Math.PI/2 },
+      { s:[RD,0.09,0.04], p:[ HW-0.02,HH-0.045,0],  r:-Math.PI/2 },
+    ].forEach(function(b) {
+      var m = new THREE.Mesh(new THREE.BoxGeometry(b.s[0],b.s[1],b.s[2]), crownMat);
+      m.position.set(b.p[0],b.p[1],b.p[2]); m.rotation.y = b.r; scene.add(m);
     });
 
-    // ── Paintings ──────────────────────────────────────────────────────────
+    // ── Paintings ─────────────────────────────────────────────────────────
 
-    function addPainting(pos, rotY, artStyle) {
-      const PW = 2.6, PH = 1.95;
-      const FT = 0.07;  // frame thickness
-      const FD = 0.07;  // frame depth
-      const group = new THREE.Group();
-      group.position.set(...pos);
-      group.rotation.y = rotY;
+    function addPainting(pos, rotY, style) {
+      var PW = 2.6, PH = 1.95, FT = 0.07, FD = 0.07;
+      var g = new THREE.Group();
+      g.position.set(pos[0], pos[1], pos[2]);
+      g.rotation.y = rotY;
 
-      // Canvas art
-      const artMesh = new THREE.Mesh(
+      // Art
+      var art = new THREE.Mesh(
         new THREE.PlaneGeometry(PW, PH),
-        new THREE.MeshLambertMaterial({ map: makePaintingCanvas(artStyle) })
+        new THREE.MeshLambertMaterial({ map: makeArt(style) })
       );
-      artMesh.position.z = 0.02;
-      group.add(artMesh);
+      art.position.z = 0.02;
+      g.add(art);
 
-      // Frame pieces (dark walnut)
-      const frameMat = new THREE.MeshLambertMaterial({ color: 0x2e1a0a });
+      // Frame
+      var fm = new THREE.MeshLambertMaterial({ color: 0x2e1a0a });
       [
-        new THREE.BoxGeometry(PW + FT * 2, FT, FD),  // top
-        new THREE.BoxGeometry(PW + FT * 2, FT, FD),  // bottom
-        new THREE.BoxGeometry(FT, PH, FD),            // left
-        new THREE.BoxGeometry(FT, PH, FD),            // right
-      ].forEach((geo, i) => {
-        const m = new THREE.Mesh(geo, frameMat);
-        if (i === 0) m.position.set(0,  PH / 2 + FT / 2, 0);
-        if (i === 1) m.position.set(0, -PH / 2 - FT / 2, 0);
-        if (i === 2) m.position.set(-PW / 2 - FT / 2, 0, 0);
-        if (i === 3) m.position.set( PW / 2 + FT / 2, 0, 0);
-        group.add(m);
+        { g: new THREE.BoxGeometry(PW+FT*2,FT,FD), p:[0, PH/2+FT/2, 0] },
+        { g: new THREE.BoxGeometry(PW+FT*2,FT,FD), p:[0,-PH/2-FT/2, 0] },
+        { g: new THREE.BoxGeometry(FT,PH,FD),       p:[-PW/2-FT/2,0,0] },
+        { g: new THREE.BoxGeometry(FT,PH,FD),       p:[ PW/2+FT/2,0,0] },
+      ].forEach(function(f) {
+        var m = new THREE.Mesh(f.g, fm);
+        m.position.set(f.p[0],f.p[1],f.p[2]); g.add(m);
       });
 
-      // Gold picture rail light
-      const lightBarMesh = new THREE.Mesh(
+      // Picture light
+      var lb = new THREE.Mesh(
         new THREE.BoxGeometry(0.9, 0.07, 0.12),
         new THREE.MeshLambertMaterial({ color: 0xb89a10 })
       );
-      lightBarMesh.position.set(0, PH / 2 + FT + 0.13, 0.06);
-      group.add(lightBarMesh);
+      lb.position.set(0, PH/2+FT+0.13, 0.06);
+      g.add(lb);
 
-      // Spotlight on painting
-      const spot = new THREE.SpotLight(0xfff2c0, 2.2, 5, Math.PI / 7, 0.4, 1.5);
-      spot.position.set(0, PH / 2 + FT + 0.2, 0.25);
-      spot.target.position.set(0, -PH * 0.1, 0.8);
-      group.add(spot);
-      group.add(spot.target);
+      var spot = new THREE.SpotLight(0xfff2c0, 2.5, 5, Math.PI/7, 0.4, 1.5);
+      spot.position.set(0, PH/2+FT+0.22, 0.3);
+      spot.target.position.set(0, -0.2, 0.8);
+      g.add(spot); g.add(spot.target);
 
-      scene.add(group);
+      scene.add(g);
     }
 
-    // One on each wall, centred, eye-level-ish
-    const EYE = 0.35;  // vertical offset from centre
-    addPainting([0, EYE, -HALF_D + 0.04], 0,           0);  // back
-    addPainting([0, EYE,  HALF_D - 0.04], Math.PI,     1);  // front
-    addPainting([-HALF_W + 0.04, EYE, 0],  Math.PI/2,  2);  // left
-    addPainting([ HALF_W - 0.04, EYE, 0], -Math.PI/2,  3);  // right
+    var EYE = 0.35;
+    addPainting([0, EYE, -HD+0.04],  0,           0);
+    addPainting([0, EYE,  HD-0.04],  Math.PI,     1);
+    addPainting([-HW+0.04, EYE, 0],  Math.PI/2,   2);
+    addPainting([ HW-0.04, EYE, 0], -Math.PI/2,   3);
 
-    // ── Resize ─────────────────────────────────────────────────────────────
-    window.addEventListener('resize', () => {
+    // ── Loop ──────────────────────────────────────────────────────────────
+
+    window.addEventListener('resize', function() {
       camera.aspect = innerWidth / innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(innerWidth, innerHeight);
     });
 
-    // ── Render loop ────────────────────────────────────────────────────────
     (function animate() {
       requestAnimationFrame(animate);
       controls.update();
