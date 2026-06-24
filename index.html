@@ -44,11 +44,15 @@
 
     var controls = new THREE.OrbitControls(camera, renderer.domElement);
     controls.enablePan = false;
-    controls.minDistance = 0.3;
-    controls.maxDistance = 6;
-    controls.maxPolarAngle = Math.PI * 0.75;
-    controls.minPolarAngle = Math.PI * 0.1;
-    controls.target.set(0, 0.3, 0);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.07;
+    controls.rotateSpeed = 0.28;
+    controls.zoomSpeed = 0.7;
+    controls.minDistance = 0.5;
+    controls.maxDistance = 5.5;
+    controls.maxPolarAngle = Math.PI * 0.58;   // hard limit — roof stays out of view
+    controls.minPolarAngle = Math.PI * 0.25;   // can't go fully overhead
+    controls.target.set(0, 0.2, 0);
     controls.update();
 
     // ── Room size ─────────────────────────────────────────────────────────
@@ -129,22 +133,62 @@
     }
 
     function makeWallMap(hexStr, repeat) {
-      var c = document.createElement('canvas'); c.width = c.height = 512;
+      var c = document.createElement('canvas'); c.width = 1024; c.height = 512;
       var x = c.getContext('2d');
-      x.fillStyle = hexStr; x.fillRect(0,0,512,512);
-      // Subtle plaster streaks
+      x.fillStyle = hexStr; x.fillRect(0,0,1024,512);
+      // Subtle wallpaper pattern — thin vertical lines
+      x.strokeStyle = 'rgba(0,0,0,0.05)'; x.lineWidth = 1;
+      for (var lx = 0; lx < 1024; lx += 32) { x.beginPath(); x.moveTo(lx,0); x.lineTo(lx,512); x.stroke(); }
+      // Faint horizontal lines
+      x.strokeStyle = 'rgba(0,0,0,0.03)';
+      for (var ly = 0; ly < 512; ly += 48) { x.beginPath(); x.moveTo(0,ly); x.lineTo(1024,ly); x.stroke(); }
+      // Subtle diamond pattern overlay
+      x.strokeStyle = 'rgba(255,255,255,0.04)'; x.lineWidth = 0.8;
+      for (var di = -512; di < 1536; di += 64) {
+        x.beginPath(); x.moveTo(di,0); x.lineTo(di+512,512); x.stroke();
+        x.beginPath(); x.moveTo(di,0); x.lineTo(di-512,512); x.stroke();
+      }
+      // Plaster streaks
       for (var i = 0; i < 30; i++) {
         var gy = Math.random() * 512;
-        var g = x.createLinearGradient(0, gy, 512, gy + 20);
+        var g = x.createLinearGradient(0, gy, 1024, gy + 20);
         g.addColorStop(0,'rgba(0,0,0,0)');
-        g.addColorStop(0.5,'rgba(0,0,0,' + (Math.random()*0.04) + ')');
+        g.addColorStop(0.5,'rgba(0,0,0,' + (Math.random()*0.035) + ')');
         g.addColorStop(1,'rgba(0,0,0,0)');
-        x.fillStyle = g; x.fillRect(0, gy, 512, 20);
+        x.fillStyle = g; x.fillRect(0, gy, 1024, 20);
       }
-      noise(x, 512, 512, 0.025);
+      noise(x, 1024, 512, 0.022);
       var t = new THREE.CanvasTexture(c);
       t.wrapS = t.wrapT = THREE.RepeatWrapping;
       t.repeat.set(repeat || 3, 1.5);
+      t.encoding = THREE.sRGBEncoding;
+      return t;
+    }
+
+    function makeWainscotMap() {
+      var c = document.createElement('canvas'); c.width = 1024; c.height = 256;
+      var x = c.getContext('2d');
+      x.fillStyle = '#f0ece4'; x.fillRect(0,0,1024,256);
+      // Panel grid
+      var panW = 200, panH = 210, padX = 14, padY = 20;
+      for (var px = 10; px < 1024; px += panW + 24) {
+        // Outer rect
+        x.fillStyle = '#e8e2d8'; x.fillRect(px, padY, panW, panH);
+        // Inner recessed panel
+        x.fillStyle = '#f4f0ea'; x.fillRect(px+padX, padY+padX, panW-padX*2, panH-padX*2);
+        // Shadow edges (give depth)
+        x.fillStyle = 'rgba(0,0,0,0.12)'; x.fillRect(px, padY, panW, 3);
+        x.fillStyle = 'rgba(0,0,0,0.12)'; x.fillRect(px, padY, 3, panH);
+        x.fillStyle = 'rgba(255,255,255,0.18)'; x.fillRect(px, padY+panH-3, panW, 3);
+        x.fillStyle = 'rgba(255,255,255,0.18)'; x.fillRect(px+panW-3, padY, 3, panH);
+      }
+      // Top rail
+      x.fillStyle = '#e0dace'; x.fillRect(0,0,1024,18);
+      x.fillStyle = 'rgba(0,0,0,0.1)'; x.fillRect(0,16,1024,2);
+      noise(x, 1024, 256, 0.015);
+      var t = new THREE.CanvasTexture(c);
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.repeat.set(4, 1);
       t.encoding = THREE.sRGBEncoding;
       return t;
     }
@@ -636,7 +680,135 @@
     }
     scene.add(bsGroup);
 
-    // Area rug
+    // ── Wainscoting panels on all walls ──────────────────────────────────
+    var wainMat = new THREE.MeshStandardMaterial({ map: makeWainscotMap(), roughness: 0.7, metalness: 0 });
+    var WAIN_H = 1.0;  // height of wainscoting
+    var WAIN_Y = -hh + WAIN_H / 2;
+
+    function addWainscot(w, pos, rotY) {
+      var m = new THREE.Mesh(new THREE.PlaneGeometry(w, WAIN_H), wainMat);
+      m.position.set(pos[0], pos[1], pos[2]); m.rotation.y = rotY;
+      m.receiveShadow = true; scene.add(m);
+    }
+    addWainscot(W, [0, WAIN_Y, -hd+0.015], 0);
+    addWainscot(W, [0, WAIN_Y,  hd-0.015], Math.PI);
+    addWainscot(D, [-hw+0.015, WAIN_Y, 0],  Math.PI/2);
+    addWainscot(D, [ hw-0.015, WAIN_Y, 0], -Math.PI/2);
+
+    // ── Fireplace on back wall ────────────────────────────────────────────
+    var fpGroup = new THREE.Group();
+    fpGroup.position.set(-1.5, -hh, -hd + 0.02);
+
+    var stoneMat = new THREE.MeshStandardMaterial({ color: 0x8a7a6a, roughness: 0.95, metalness: 0 });
+    var fireMat  = new THREE.MeshStandardMaterial({ color: 0x1a1008, roughness: 0.9 });
+    var mantMat  = new THREE.MeshStandardMaterial({ color: 0xf0ece4, roughness: 0.65, metalness: 0 });
+
+    // Surround
+    var fpW = 1.4, fpH = 1.35;
+    var fpSurround = new THREE.Mesh(new THREE.BoxGeometry(fpW, fpH, 0.22), stoneMat);
+    fpSurround.position.set(0, fpH/2, 0); fpSurround.castShadow = true; fpGroup.add(fpSurround);
+    // Opening (dark box)
+    var fpOpen = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.68, 0.2), fireMat);
+    fpOpen.position.set(0, 0.42, 0.02); fpGroup.add(fpOpen);
+    // Mantel shelf
+    var mantel = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.07, 0.32), mantMat);
+    mantel.position.set(0, fpH + 0.035, 0.06); mantel.castShadow = true; fpGroup.add(mantel);
+    // Mantel legs
+    [-0.6, 0.6].forEach(function(lx) {
+      var leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.22, 0.18), mantMat);
+      leg.position.set(lx, fpH - 0.11, 0.06); fpGroup.add(leg);
+    });
+    // Fire glow (emissive plane inside opening)
+    var fireGlow = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.72, 0.64),
+      new THREE.MeshBasicMaterial({ color: 0xff6010 })
+    );
+    fireGlow.position.set(0, 0.42, 0.04); fpGroup.add(fireGlow);
+    // Fire light
+    var fireLight = new THREE.PointLight(0xff8020, 40, 3.5, 2);
+    fireLight.position.set(0, 0.5, 0.4);
+    fpGroup.add(fireLight);
+
+    // Mantel decorations
+    var vaseM = new THREE.MeshStandardMaterial({ color: 0x1a3a70, roughness: 0.3, metalness: 0.1 });
+    [-0.52, 0.52].forEach(function(vx) {
+      var v = new THREE.Mesh(new THREE.CylinderGeometry(0.04,0.055,0.22,12), vaseM);
+      v.position.set(vx, fpH + 0.145, 0.06); fpGroup.add(v);
+    });
+    var clockM = new THREE.MeshStandardMaterial({ color: 0x2a1808, roughness: 0.7, metalness: 0.2 });
+    var clock = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.28, 0.1), clockM);
+    clock.position.set(0, fpH + 0.21, 0.06); fpGroup.add(clock);
+    // Clock face
+    var cf = new THREE.Mesh(new THREE.CircleGeometry(0.09, 20), new THREE.MeshBasicMaterial({ color: 0xf8f0e0 }));
+    cf.position.set(0, fpH + 0.23, 0.12); fpGroup.add(cf);
+
+    scene.add(fpGroup);
+
+    // ── Curtains around window ────────────────────────────────────────────
+    var curtainMat = new THREE.MeshStandardMaterial({ color: 0x4a3020, roughness: 0.97, side: THREE.DoubleSide });
+    var curtainGroup = new THREE.Group();
+    curtainGroup.position.set(-hw + 0.05, 0, -1.5);
+    curtainGroup.rotation.y = Math.PI/2;
+
+    // Rod
+    var rod = new THREE.Mesh(new THREE.CylinderGeometry(0.015,0.015,2.6,8), brassM);
+    rod.rotation.z = Math.PI/2; rod.position.set(0, hh - 0.25, 0.1);
+    curtainGroup.add(rod);
+    // Finials
+    [-1.28, 1.28].forEach(function(fx) {
+      var fin = new THREE.Mesh(new THREE.SphereGeometry(0.04,10,8), brassM);
+      fin.position.set(fx, hh - 0.25, 0.1); curtainGroup.add(fin);
+    });
+
+    // Curtain panels (left and right, draped open)
+    [-1, 1].forEach(function(side) {
+      var panX = side * 1.05;
+      for (var fold = 0; fold < 5; fold++) {
+        var fz = Math.sin(fold * 1.2) * 0.04;
+        var panel = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.18, 2.3),
+          curtainMat
+        );
+        panel.position.set(panX + fold * side * 0.038, -0.08, 0.08 + fz);
+        curtainGroup.add(panel);
+      }
+    });
+    scene.add(curtainGroup);
+
+    // ── Floor plant (right corner) ────────────────────────────────────────
+    var plantGroup = new THREE.Group();
+    plantGroup.position.set(hw - 0.65, -hh, hd - 0.65);
+    // Pot
+    var potM = new THREE.MeshStandardMaterial({ color: 0x8a5a30, roughness: 0.85 });
+    var pot = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.14, 0.32, 12), potM);
+    pot.position.y = 0.16; pot.castShadow = true; plantGroup.add(pot);
+    var potRim = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.18, 0.04, 12), potM);
+    potRim.position.y = 0.34; plantGroup.add(potRim);
+    var soil = new THREE.Mesh(new THREE.CircleGeometry(0.18, 12), new THREE.MeshStandardMaterial({ color: 0x2a1808, roughness: 0.98 }));
+    soil.rotation.x = -Math.PI/2; soil.position.y = 0.33; plantGroup.add(soil);
+    // Stems + leaves (monstera-ish)
+    var leafM = new THREE.MeshStandardMaterial({ color: 0x1e5a18, roughness: 0.88, side: THREE.DoubleSide });
+    var stemM2 = new THREE.MeshStandardMaterial({ color: 0x2a6020, roughness: 0.9 });
+    for (var li = 0; li < 7; li++) {
+      var ang2 = (li / 7) * Math.PI * 2;
+      var lean = 0.3 + Math.random() * 0.35;
+      var stemH = 0.5 + Math.random() * 0.6;
+      // Stem
+      var stem2 = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.016, stemH, 6), stemM2);
+      stem2.position.set(Math.cos(ang2)*lean*0.5, 0.36 + stemH/2, Math.sin(ang2)*lean*0.5);
+      stem2.rotation.z = Math.cos(ang2) * lean * 0.5;
+      stem2.rotation.x = Math.sin(ang2) * lean * 0.5;
+      plantGroup.add(stem2);
+      // Leaf
+      var leaf = new THREE.Mesh(new THREE.CircleGeometry(0.18 + Math.random()*0.1, 8), leafM);
+      leaf.position.set(Math.cos(ang2)*lean, 0.4 + stemH, Math.sin(ang2)*lean);
+      leaf.rotation.x = -0.4 + Math.random()*0.3;
+      leaf.rotation.z = ang2;
+      plantGroup.add(leaf);
+    }
+    scene.add(plantGroup);
+
+    // ── Area rug
     var rugMat = new THREE.MeshStandardMaterial({ color: 0x6a3a28, roughness: 0.97 });
     var rugMesh = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 2.0), rugMat);
     rugMesh.rotation.x = -Math.PI/2;
@@ -717,8 +889,15 @@
     });
 
     // ── Loop ─────────────────────────────────────────────────────────────
+    var clock2 = new THREE.Clock();
     (function animate() {
       requestAnimationFrame(animate);
+      var t2 = clock2.getElapsedTime();
+      // Flicker fire
+      fireLight.intensity = 35 + Math.sin(t2 * 7.3) * 8 + Math.sin(t2 * 13.1) * 5;
+      fireLight.color.setHSL(0.07 + Math.sin(t2*5)*0.015, 1, 0.5);
+      // Lamp warmth flicker (very subtle)
+      lampLight.intensity = 28 + Math.sin(t2 * 2.1) * 1.5;
       controls.update();
       renderer.render(scene, camera);
     })();
